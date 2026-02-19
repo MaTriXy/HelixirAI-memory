@@ -113,6 +113,8 @@ pub struct ThinkRecallParams {
     pub query: String,
     #[schemars(description = "Parent thought index to attach recalled facts to")]
     pub parent_idx: u32,
+    #[schemars(description = "User identifier (defaults to session-scoped search if omitted)")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, rmcp::schemars::JsonSchema)]

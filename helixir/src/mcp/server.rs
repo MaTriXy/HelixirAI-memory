@@ -306,9 +306,10 @@ impl HelixirMcpServer {
         info!("💭 Recalling from main memory: '{}'", params.query);
 
         let parent = petgraph::stable_graph::NodeIndex::new(params.parent_idx as usize);
+        let user_id = params.user_id.as_deref().unwrap_or("default");
 
         let results = self.fast_think
-            .recall(&params.session_id, &params.query, parent)
+            .recall(&params.session_id, &params.query, parent, user_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 

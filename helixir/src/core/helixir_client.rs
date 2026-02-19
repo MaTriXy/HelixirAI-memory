@@ -39,6 +39,8 @@ pub struct AddMemoryResult {
     pub memories_added: usize,
     pub memory_ids: Vec<String>,
     pub chunks_created: usize,
+    pub entities_extracted: usize,
+    pub relations_created: usize,
     pub stats: HashMap<String, serde_json::Value>,
 }
 
@@ -224,6 +226,8 @@ impl HelixirClient {
             memories_added: result.added.len(),
             memory_ids: result.added,
             chunks_created: result.chunks_created,
+            entities_extracted: result.entities_extracted,
+            relations_created: result.reasoning_relations_created,
             stats: result.metadata,
         })
     }

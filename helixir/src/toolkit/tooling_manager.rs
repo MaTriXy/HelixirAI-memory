@@ -766,6 +766,23 @@ impl ToolingManager {
         Ok(())
     }
 
+    async fn get_memory_type(&self, memory_id: &str) -> Option<String> {
+        #[derive(serde::Deserialize)]
+        struct MemoryNode {
+            #[serde(default)]
+            memory_type: String,
+        }
+
+        self.db
+            .execute_query::<MemoryNode, _>(
+                "getMemory",
+                &serde_json::json!({"memory_id": memory_id}),
+            )
+            .await
+            .ok()
+            .and_then(|m| if m.memory_type.is_empty() { None } else { Some(m.memory_type) })
+    }
+
     
     pub async fn search_memory(
         &self,
@@ -1322,15 +1339,27 @@ impl ToolingManager {
                         if has_db_link {
                             true
                         } else {
-                            let ontology = self.ontology_manager.read();
-                            if ontology.is_loaded() {
-                                let mapped = ontology.map_memory_to_concepts(&candidate.content, None);
-                                mapped.iter().any(|m| 
-                                    m.concept.name.to_lowercase() == ct.to_lowercase() ||
-                                    m.concept.id.to_lowercase() == ct.to_lowercase()
-                                )
+                            let memory_type = self.get_memory_type(&candidate.memory_id).await;
+                            let type_matches = memory_type.as_ref()
+                                .map(|mt| mt.to_lowercase() == ct.to_lowercase())
+                                .unwrap_or(false);
+
+                            if type_matches {
+                                true
                             } else {
-                                false
+                                let ontology = self.ontology_manager.read();
+                                if ontology.is_loaded() {
+                                    let mapped = ontology.map_memory_to_concepts(
+                                        &candidate.content,
+                                        memory_type.as_deref(),
+                                    );
+                                    mapped.iter().any(|m| 
+                                        m.concept.name.to_lowercase() == ct.to_lowercase() ||
+                                        m.concept.id.to_lowercase() == ct.to_lowercase()
+                                    )
+                                } else {
+                                    false
+                                }
                             }
                         }
                     }

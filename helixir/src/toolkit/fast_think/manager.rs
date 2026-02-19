@@ -82,6 +82,7 @@ impl FastThinkManager {
         session_id: &str,
         query: &str,
         parent_thought: NodeIndex,
+        user_id: &str,
     ) -> Result<Vec<NodeIndex>, FastThinkError> {
         {
             let mut sessions = self.sessions.write();
@@ -93,9 +94,9 @@ impl FastThinkManager {
             .main_memory
             .search(
                 query,
-                "contextual",
+                user_id,
                 Some(self.limits.max_recall_results),
-                None,
+                Some("contextual"),
                 None,
                 None,
             )
@@ -190,11 +191,15 @@ impl FastThinkManager {
             .await
             .map_err(|e| FastThinkError::CommitFailed(e.to_string()))?;
 
+        let pipeline_entities = result.entities_extracted;
+        let pipeline_relations = result.relations_created;
+
         info!(
             session_id = session_id,
             memory_id = ?result.memory_ids.first(),
             thoughts_processed = session.thought_count(),
-            entities_extracted = session.entity_count(),
+            entities_extracted = pipeline_entities + session.entity_count(),
+            relations_created = pipeline_relations,
             elapsed_ms = session.elapsed().as_millis(),
             "Committed thinking session to main memory"
         );
@@ -202,8 +207,8 @@ impl FastThinkManager {
         Ok(CommitResult {
             memory_id: result.memory_ids.first().cloned().unwrap_or_default(),
             thoughts_processed: session.thought_count(),
-            entities_extracted: session.entity_count(),
-            concepts_mapped: session.concept_count(),
+            entities_extracted: pipeline_entities + session.entity_count(),
+            concepts_mapped: pipeline_relations + session.concept_count(),
             elapsed: session.elapsed(),
         })
     }
@@ -255,19 +260,23 @@ impl FastThinkManager {
             .await
             .map_err(|e| FastThinkError::CommitFailed(e.to_string()))?;
 
+        let pipeline_entities = result.entities_extracted;
+        let pipeline_relations = result.relations_created;
+
         warn!(
             session_id = session_id,
             reason = reason,
             memory_id = ?result.memory_ids.first(),
             thoughts_processed = session.thought_count(),
+            entities_extracted = pipeline_entities,
             "Committed PARTIAL thinking session to main memory"
         );
 
         Ok(CommitResult {
             memory_id: result.memory_ids.first().cloned().unwrap_or_default(),
             thoughts_processed: session.thought_count(),
-            entities_extracted: session.entity_count(),
-            concepts_mapped: session.concept_count(),
+            entities_extracted: pipeline_entities + session.entity_count(),
+            concepts_mapped: pipeline_relations + session.concept_count(),
             elapsed: session.elapsed(),
         })
     }

@@ -103,7 +103,39 @@ impl OntologyManager {
         if !self.is_loaded {
             return Vec::new();
         }
-        self.mapper.map_to_concepts(content, 30)
+
+        let mut matches = self.mapper.map_to_concepts(content, 30);
+
+        if let Some(mt) = memory_type {
+            let concept_id = match mt.to_lowercase().as_str() {
+                "preference" => Some("Preference"),
+                "skill" => Some("Skill"),
+                "goal" => Some("Goal"),
+                "opinion" => Some("Opinion"),
+                "fact" => Some("Fact"),
+                "action" => Some("Action"),
+                "experience" => Some("Experience"),
+                "achievement" => Some("Achievement"),
+                _ => None,
+            };
+
+            if let Some(cid) = concept_id {
+                let already_linked = matches.iter().any(|m| m.concept.id == cid);
+                if !already_linked {
+                    matches.push(ConceptMatch {
+                        concept: TextConcept {
+                            id: cid.to_string(),
+                            name: cid.to_string(),
+                            concept_type: mapper::ConceptType::Goal,
+                        },
+                        confidence: 0.9,
+                        matched_keywords: vec![format!("memory_type={}", mt)],
+                    });
+                }
+            }
+        }
+
+        matches
     }
 
     pub fn get_stats(&self) -> OntologyStats {
