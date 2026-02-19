@@ -1330,101 +1330,157 @@ impl ToolingManager {
             .search(query, &query_embedding, user_id, limit * 3, mode, None)
             .await?;
 
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        
         let mut results = Vec::new();
-        
-        for candidate in candidates {
-            
-            #[derive(serde::Deserialize)]
-            struct ConceptsResult {
-                #[serde(default)]
-                instance_of: Vec<ConceptNode>,
-                #[serde(default)]
-                belongs_to: Vec<ConceptNode>,
-            }
-            
-            #[derive(serde::Deserialize)]
-            struct ConceptNode {
-                #[serde(default)]
-                concept_id: String,
-                #[serde(default)]
-                name: String,
-            }
 
-            if let Ok(concepts) = self.db
-                .execute_query::<ConceptsResult, _>(
-                    "getMemoryConcepts",
-                    &serde_json::json!({"memory_id": candidate.memory_id}),
-                )
-                .await
-            {
-                
-                let matches_type = match concept_type {
-                    Some(ct) => {
-                        let has_db_link = concepts.instance_of.iter().any(|c| 
-                            c.name.to_lowercase() == ct.to_lowercase() ||
-                            c.concept_id.to_lowercase().contains(&ct.to_lowercase())
-                        );
-                        
-                        if has_db_link {
-                            true
-                        } else {
-                            let memory_type = self.get_memory_type(&candidate.memory_id).await;
-                            let type_matches = memory_type.as_ref()
-                                .map(|mt| mt.to_lowercase() == ct.to_lowercase())
-                                .unwrap_or(false);
+        if !candidates.is_empty() {
+            for candidate in &candidates {
+                #[derive(serde::Deserialize)]
+                struct ConceptsResult {
+                    #[serde(default)]
+                    instance_of: Vec<ConceptNode>,
+                    #[serde(default)]
+                    belongs_to: Vec<ConceptNode>,
+                }
 
-                            if type_matches {
+                #[derive(serde::Deserialize)]
+                struct ConceptNode {
+                    #[serde(default)]
+                    concept_id: String,
+                    #[serde(default)]
+                    name: String,
+                }
+
+                if let Ok(concepts) = self.db
+                    .execute_query::<ConceptsResult, _>(
+                        "getMemoryConcepts",
+                        &serde_json::json!({"memory_id": candidate.memory_id}),
+                    )
+                    .await
+                {
+                    let matches_type = match concept_type {
+                        Some(ct) => {
+                            let has_db_link = concepts.instance_of.iter().any(|c|
+                                c.name.to_lowercase() == ct.to_lowercase() ||
+                                c.concept_id.to_lowercase().contains(&ct.to_lowercase())
+                            );
+
+                            if has_db_link {
                                 true
                             } else {
-                                let ontology = self.ontology_manager.read();
-                                if ontology.is_loaded() {
-                                    let mapped = ontology.map_memory_to_concepts(
-                                        &candidate.content,
-                                        memory_type.as_deref(),
-                                    );
-                                    mapped.iter().any(|m| 
-                                        m.concept.name.to_lowercase() == ct.to_lowercase() ||
-                                        m.concept.id.to_lowercase() == ct.to_lowercase()
-                                    )
+                                let memory_type = self.get_memory_type(&candidate.memory_id).await;
+                                let type_matches = memory_type.as_ref()
+                                    .map(|mt| mt.to_lowercase() == ct.to_lowercase())
+                                    .unwrap_or(false);
+
+                                if type_matches {
+                                    true
                                 } else {
-                                    false
+                                    let ontology = self.ontology_manager.read();
+                                    if ontology.is_loaded() {
+                                        let mapped = ontology.map_memory_to_concepts(
+                                            &candidate.content,
+                                            memory_type.as_deref(),
+                                        );
+                                        mapped.iter().any(|m|
+                                            m.concept.name.to_lowercase() == ct.to_lowercase() ||
+                                            m.concept.id.to_lowercase() == ct.to_lowercase()
+                                        )
+                                    } else {
+                                        false
+                                    }
                                 }
                             }
                         }
-                    }
-                    None => true,
-                };
+                        None => true,
+                    };
 
-                
-                let matches_tags = match tags {
-                    Some(t) => {
-                        let tag_list: Vec<&str> = t.split(',').map(|s| s.trim()).collect();
-                        tag_list.iter().any(|tag| 
-                            candidate.content.to_lowercase().contains(&tag.to_lowercase())
-                        )
-                    }
-                    None => true,
-                };
+                    let matches_tags = match tags {
+                        Some(t) => {
+                            let tag_list: Vec<&str> = t.split(',').map(|s| s.trim()).collect();
+                            tag_list.iter().any(|tag|
+                                candidate.content.to_lowercase().contains(&tag.to_lowercase())
+                            )
+                        }
+                        None => true,
+                    };
 
-                if matches_type && matches_tags {
-                    results.push(SearchMemoryResult {
-                        memory_id: candidate.memory_id,
-                        content: candidate.content,
-                        score: candidate.score as f64,
-                        method: format!("concept_search_{}", mode),
-                        metadata: candidate.metadata,
-                        created_at: candidate.created_at,
-                    });
+                    if matches_type && matches_tags {
+                        results.push(SearchMemoryResult {
+                            memory_id: candidate.memory_id.clone(),
+                            content: candidate.content.clone(),
+                            score: candidate.score as f64,
+                            method: format!("concept_search_{}", mode),
+                            metadata: candidate.metadata.clone(),
+                            created_at: candidate.created_at.clone(),
+                        });
 
-                    if results.len() >= limit {
-                        break;
+                        if results.len() >= limit {
+                            break;
+                        }
                     }
                 }
+            }
+        }
+
+        if results.is_empty() && concept_type.is_some() {
+            let ct = concept_type.unwrap();
+            debug!("Vector search yielded no concept matches for type='{}', falling back to getUserMemories", ct);
+
+            #[derive(serde::Deserialize)]
+            struct FallbackMemoriesResult {
+                #[serde(default)]
+                memories: Vec<FallbackMemory>,
+            }
+            #[derive(serde::Deserialize)]
+            struct FallbackMemory {
+                #[serde(default)]
+                memory_id: String,
+                #[serde(default)]
+                content: String,
+                #[serde(default)]
+                memory_type: String,
+                #[serde(default)]
+                created_at: String,
+            }
+
+            let fetch_limit = (limit * 5).max(50) as i64;
+            if let Ok(fallback) = self.db
+                .execute_query::<FallbackMemoriesResult, _>(
+                    "getUserMemories",
+                    &serde_json::json!({"user_id": user_id, "limit": fetch_limit}),
+                )
+                .await
+            {
+                let ct_lower = ct.to_lowercase();
+                for mem in fallback.memories {
+                    if mem.memory_type.to_lowercase() == ct_lower {
+                        let matches_tags = match tags {
+                            Some(t) => {
+                                let tag_list: Vec<&str> = t.split(',').map(|s| s.trim()).collect();
+                                tag_list.iter().any(|tag|
+                                    mem.content.to_lowercase().contains(&tag.to_lowercase())
+                                )
+                            }
+                            None => true,
+                        };
+
+                        if matches_tags {
+                            results.push(SearchMemoryResult {
+                                memory_id: mem.memory_id,
+                                content: mem.content,
+                                score: 0.75,
+                                method: "concept_search_db_fallback".to_string(),
+                                metadata: HashMap::new(),
+                                created_at: mem.created_at,
+                            });
+
+                            if results.len() >= limit {
+                                break;
+                            }
+                        }
+                    }
+                }
+                debug!("DB fallback found {} results for type='{}'", results.len(), ct);
             }
         }
 
