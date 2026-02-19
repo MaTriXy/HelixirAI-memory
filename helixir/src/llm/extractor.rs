@@ -133,12 +133,31 @@ impl<P: LlmProvider> LlmExtractor<P> {
         let mut prompt = String::from(
             r#"You are a memory extraction system. Analyze the text and extract structured information.
 
+Each extracted memory MUST have a memory_type from EXACTLY one of these 7 types:
+
+- "fact": Objective information, knowledge, or statements about the world.
+  Example: "The Earth orbits the Sun" or "Rust is a systems programming language"
+- "preference": Personal likes, dislikes, tastes, or favorites.
+  Example: "I love playing chess" or "I prefer dark mode"
+- "skill": An ability, competency, or expertise the person possesses.
+  Example: "I am skilled at pattern recognition" or "I can write Rust code"
+  NOTE: "I am skilled at X" or "I can do X" is ALWAYS a skill, never a fact.
+- "goal": Something the person wants to achieve, a plan, or an aspiration.
+  Example: "My goal is to become a grandmaster" or "I want to build a database engine"
+- "opinion": A subjective belief, judgment, or viewpoint.
+  Example: "In my opinion, Rust is the best language" or "I think chess is the ultimate test"
+- "experience": A past event, situation, or something that happened to the person.
+  Example: "I lived in Tokyo for two years" or "I went through a career change"
+- "achievement": A specific accomplishment, milestone, or completed goal.
+  Example: "I achieved winning a tournament" or "I built a working compiler"
+  NOTE: "I achieved X" or "I built/completed/finished X" is ALWAYS an achievement, never an experience.
+
 Output JSON with this structure:
 {
   "memories": [
     {
-      "text": "atomic fact or preference",
-      "memory_type": "fact|preference|goal|opinion|experience",
+      "text": "atomic standalone fact",
+      "memory_type": "fact|preference|skill|goal|opinion|experience|achievement",
       "certainty": 80,
       "importance": 50,
       "entities": ["entity_id1", "entity_id2"]
@@ -191,7 +210,15 @@ Always look for causal and logical connections between extracted memories. If th
   "relations": []"#);
         }
 
-        prompt.push_str("\n}\n\nExtract atomic, standalone facts. Each memory should be self-contained.");
+        prompt.push_str(r#"
+}
+
+Rules:
+- Extract atomic, standalone facts. Each memory must be self-contained.
+- Use ALL 7 memory_type values when appropriate. Do not collapse skill/achievement into fact/experience.
+- "skilled at", "can", "able to", "expert in" → always "skill".
+- "achieved", "built", "completed", "finished", "won" → always "achievement".
+- When uncertain between two types, prefer the more specific one (skill > fact, achievement > experience)."#);
 
         prompt
     }
