@@ -422,39 +422,60 @@ impl ReasoningEngine {
     
     pub async fn infer_relations(
         &self,
-        memory_id: &str,
-        context_memories: &[String],
+        new_memory_id: &str,
+        new_memory_content: &str,
+        similar_memories: &[(String, String)],
     ) -> Result<Vec<ReasoningRelation>, ReasoningError> {
         let Some(ref llm) = self.llm_provider else {
             return Ok(Vec::new());
         };
 
-        let system_prompt = r#"You are a reasoning engine. Analyze the given memory and context to infer logical relationships.
-Output JSON array with relations: [{"from_id": "...", "to_id": "...", "type": "IMPLIES|BECAUSE|CONTRADICTS|SUPPORTS", "strength": 0-100}]"#;
+        if similar_memories.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let system_prompt = r#"You are a reasoning engine. Analyze the NEW memory and EXISTING memories to infer logical relationships between them.
+
+Output a JSON array. Each element:
+{"existing_index": 0, "type": "IMPLIES|BECAUSE|CONTRADICTS|SUPPORTS", "strength": 0-100}
+
+- IMPLIES: new memory logically leads to existing, or vice versa
+- BECAUSE: one is a cause/reason for the other
+- CONTRADICTS: they conflict or are incompatible
+- SUPPORTS: they reinforce each other
+
+Only output relations with strength >= 60. If no meaningful relation exists, output empty array []."#;
+
+        let context_str: String = similar_memories
+            .iter()
+            .enumerate()
+            .map(|(i, (_, content))| format!("[{}] {}", i, content))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let user_prompt = format!(
-            "Memory ID: {}\nContext memories:\n{}",
-            memory_id,
-            context_memories.join("\n")
+            "NEW memory: {}\n\nEXISTING memories:\n{}",
+            new_memory_content, context_str
         );
 
         match llm.generate(system_prompt, &user_prompt, Some("json")).await {
             Ok((response, _metadata)) => {
-                
                 match serde_json::from_str::<Vec<serde_json::Value>>(&response) {
                     Ok(inferred) => {
                         let relations: Vec<ReasoningRelation> = inferred
                             .iter()
                             .filter_map(|r| {
+                                let idx = r.get("existing_index")?.as_u64()? as usize;
+                                let (target_id, target_content) = similar_memories.get(idx)?;
                                 Some(ReasoningRelation {
                                     relation_id: format!(
                                         "inferred_{}_{}",
-                                        r.get("from_id")?.as_str()?,
-                                        r.get("to_id")?.as_str()?
+                                        crate::safe_truncate(new_memory_id, 8),
+                                        crate::safe_truncate(target_id, 8)
                                     ),
-                                    from_memory_id: r.get("from_id")?.as_str()?.to_string(),
-                                    to_memory_id: r.get("to_id")?.as_str()?.to_string(),
-                                    to_memory_content: String::new(),
+                                    from_memory_id: new_memory_id.to_string(),
+                                    to_memory_id: target_id.clone(),
+                                    to_memory_content: target_content.clone(),
                                     relation_type: match r.get("type")?.as_str()? {
                                         "IMPLIES" => ReasoningType::Implies,
                                         "BECAUSE" => ReasoningType::Because,
@@ -471,14 +492,14 @@ Output JSON array with relations: [{"from_id": "...", "to_id": "...", "type": "I
                         Ok(relations)
                     }
                     Err(e) => {
-                        warn!("Failed to parse LLM response: {}", e);
+                        warn!("Failed to parse LLM inference response: {}", e);
                         Ok(Vec::new())
                     }
                 }
             }
             Err(e) => {
-                error!("LLM inference failed: {}", e);
-                Err(ReasoningError::LlmError(e.to_string()))
+                warn!("LLM inference failed (non-critical): {}", e);
+                Ok(Vec::new())
             }
         }
     }

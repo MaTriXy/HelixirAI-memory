@@ -295,15 +295,31 @@ impl ToolingManager {
                     }
                 }
                 MemoryOperation::Supersede => {
-                    
                     let (new_id, new_chunks) = self.store_new_memory(&memory, user_id, &vector, tags).await?;
                     chunks_created += new_chunks;
                     if let Some(old_id) = &decision.supersedes_memory_id {
                         debug!("SUPERSEDE: {} supersedes {}", new_id, old_id);
-                        
-                        let _ = self.reasoning_engine
-                            .add_relation(&new_id, old_id, ReasoningType::Supports, 90, None)
+                        #[derive(Serialize)]
+                        struct SupersedeParams {
+                            new_id: String,
+                            old_id: String,
+                            reason: String,
+                            superseded_at: String,
+                            is_contradiction: i64,
+                        }
+                        let _ = self.db
+                            .execute_query::<serde_json::Value, _>(
+                                "addMemorySupersession",
+                                &SupersedeParams {
+                                    new_id: new_id.clone(),
+                                    old_id: old_id.clone(),
+                                    reason: decision.reasoning.clone(),
+                                    superseded_at: chrono::Utc::now().to_rfc3339(),
+                                    is_contradiction: 0,
+                                },
+                            )
                             .await;
+                        relations_created += 1;
                     }
                     added_ids.push(new_id.clone());
                     new_id
@@ -341,7 +357,42 @@ impl ToolingManager {
                 }
             };
 
-            
+            if !similar_memories.is_empty() && matches!(decision.operation, MemoryOperation::Add | MemoryOperation::Supersede) {
+                let context_pairs: Vec<(String, String)> = similar_memories
+                    .iter()
+                    .take(5)
+                    .map(|s| (s.id.clone(), s.content.clone()))
+                    .collect();
+                match self.reasoning_engine
+                    .infer_relations(&memory_id, &memory.text, &context_pairs)
+                    .await
+                {
+                    Ok(inferred) => {
+                        for rel in &inferred {
+                            match self.reasoning_engine.add_relation(
+                                &rel.from_memory_id,
+                                &rel.to_memory_id,
+                                rel.relation_type,
+                                rel.strength,
+                                rel.reasoning_id.as_deref(),
+                            ).await {
+                                Ok(_) => {
+                                    relations_created += 1;
+                                    info!(
+                                        "Inferred {} relation: {} -> {}",
+                                        rel.relation_type.edge_name(),
+                                        safe_truncate(&memory_id, 12),
+                                        safe_truncate(&rel.to_memory_id, 12)
+                                    );
+                                }
+                                Err(e) => warn!("Failed to persist inferred relation: {}", e),
+                            }
+                        }
+                    }
+                    Err(e) => debug!("Relation inference skipped: {}", e),
+                }
+            }
+
             for entity_id in &memory.entities {
                 
                 if let Some(entity) = extraction.entities.iter().find(|e| &e.id == entity_id) {
@@ -398,71 +449,78 @@ impl ToolingManager {
         }
 
         
+        let mut memory_index_to_id: Vec<Option<String>> = Vec::new();
         let mut memory_content_to_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        for (idx, mem) in memories_to_store.iter().enumerate() {
-            if idx < added_ids.len() {
-                
-                let normalized = mem.text.to_lowercase();
-                memory_content_to_id.insert(normalized.clone(), added_ids[idx].clone());
-                
-                let short_key: String = normalized.chars().take(100).collect();
-                if short_key.len() < normalized.len() {
-                    memory_content_to_id.insert(short_key, added_ids[idx].clone());
+        {
+            let mut add_idx = 0usize;
+            for mem in &memories_to_store {
+                if add_idx < added_ids.len() {
+                    memory_index_to_id.push(Some(added_ids[add_idx].clone()));
+                    let normalized = mem.text.to_lowercase();
+                    memory_content_to_id.insert(normalized, added_ids[add_idx].clone());
+                    add_idx += 1;
+                } else {
+                    memory_index_to_id.push(None);
                 }
             }
         }
 
         for relation in &extraction.relations {
-            debug!(
-                "Processing relation: '{}' --{}-> '{}'",
-                safe_truncate(&relation.from_memory_content, 30),
-                relation.relation_type,
-                safe_truncate(&relation.to_memory_content, 30)
-            );
-
-            
-            let from_id = memory_content_to_id.get(&relation.from_memory_content.to_lowercase())
+            let from_id = relation.from_memory_index
+                .and_then(|idx| memory_index_to_id.get(idx).and_then(|o| o.as_ref()))
                 .or_else(|| {
-                    
-                    memory_content_to_id.iter()
-                        .find(|(k, _)| {
-                            k.contains(&relation.from_memory_content.to_lowercase()) ||
-                            relation.from_memory_content.to_lowercase().contains(k.as_str())
-                        })
-                        .map(|(_, v)| v)
+                    if !relation.from_memory_content.is_empty() {
+                        memory_content_to_id.get(&relation.from_memory_content.to_lowercase())
+                            .or_else(|| {
+                                memory_content_to_id.iter()
+                                    .find(|(k, _)| {
+                                        k.contains(&relation.from_memory_content.to_lowercase()) ||
+                                        relation.from_memory_content.to_lowercase().contains(k.as_str())
+                                    })
+                                    .map(|(_, v)| v)
+                            })
+                    } else {
+                        None
+                    }
                 });
 
-            let to_id = memory_content_to_id.get(&relation.to_memory_content.to_lowercase())
+            let to_id = relation.to_memory_index
+                .and_then(|idx| memory_index_to_id.get(idx).and_then(|o| o.as_ref()))
                 .or_else(|| {
-                    memory_content_to_id.iter()
-                        .find(|(k, _)| {
-                            k.contains(&relation.to_memory_content.to_lowercase()) ||
-                            relation.to_memory_content.to_lowercase().contains(k.as_str())
-                        })
-                        .map(|(_, v)| v)
+                    if !relation.to_memory_content.is_empty() {
+                        memory_content_to_id.get(&relation.to_memory_content.to_lowercase())
+                            .or_else(|| {
+                                memory_content_to_id.iter()
+                                    .find(|(k, _)| {
+                                        k.contains(&relation.to_memory_content.to_lowercase()) ||
+                                        relation.to_memory_content.to_lowercase().contains(k.as_str())
+                                    })
+                                    .map(|(_, v)| v)
+                            })
+                    } else {
+                        None
+                    }
                 });
 
             if let (Some(from), Some(to)) = (from_id, to_id) {
-                
                 let rel_type = match relation.relation_type.to_uppercase().as_str() {
                     "IMPLIES" => ReasoningType::Implies,
                     "BECAUSE" => ReasoningType::Because,
                     "CONTRADICTS" => ReasoningType::Contradicts,
                     "SUPPORTS" => ReasoningType::Supports,
-                    _ => ReasoningType::Implies, 
+                    _ => ReasoningType::Implies,
                 };
 
-                
                 match self.reasoning_engine.add_relation(
                     from,
                     to,
                     rel_type,
-                    80, 
-                    None, 
+                    relation.strength,
+                    None,
                 ).await {
                     Ok(rel) => {
                         relations_created += 1;
-                        debug!("Created {} relation: {} -> {}", rel.relation_type.edge_name(), from, to);
+                        info!("Created {} relation: {} -> {}", rel.relation_type.edge_name(), from, to);
                     }
                     Err(e) => {
                         warn!("Failed to create relation: {}", e);
@@ -470,9 +528,8 @@ impl ToolingManager {
                 }
             } else {
                 debug!(
-                    "Could not find memory IDs for relation: '{}' -> '{}'",
-                    safe_truncate(&relation.from_memory_content, 30),
-                    safe_truncate(&relation.to_memory_content, 30)
+                    "Could not resolve memory IDs for relation (from_idx={:?}, to_idx={:?})",
+                    relation.from_memory_index, relation.to_memory_index
                 );
             }
         }

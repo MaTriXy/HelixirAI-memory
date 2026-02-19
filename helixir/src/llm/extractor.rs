@@ -46,9 +46,13 @@ pub struct ExtractedEntity {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedRelation {
-    
+    #[serde(default)]
+    pub from_memory_index: Option<usize>,
+    #[serde(default)]
+    pub to_memory_index: Option<usize>,
+    #[serde(default)]
     pub from_memory_content: String,
-    
+    #[serde(default)]
     pub to_memory_content: String,
     
     pub relation_type: String,
@@ -163,17 +167,25 @@ Output JSON with this structure:
                 r#",
   "relations": [
     {
-      "from_memory_content": "FULL content of source memory - must match a memory text exactly",
-      "to_memory_content": "FULL content of target memory - must match a memory text exactly",
+      "from_memory_index": 0,
+      "to_memory_index": 1,
       "relation_type": "IMPLIES|BECAUSE|CONTRADICTS|SUPPORTS",
       "strength": 80,
       "confidence": 80,
       "explanation": "Why this relation exists"
     }
-  ]
-  
-CRITICAL for relations: Both from_memory_content and to_memory_content MUST be the EXACT FULL TEXT of memories from the 'memories' array above. If you cannot match exactly, skip the relation."#,
+  ]"#,
             );
+            prompt.push_str(r#"
+
+Relations use INDICES into the memories array (0-based).
+Relation types:
+- IMPLIES: memory A logically leads to or suggests memory B
+- BECAUSE: memory A is the reason/cause for memory B
+- CONTRADICTS: memory A conflicts with memory B
+- SUPPORTS: memory A provides evidence for memory B
+
+Always look for causal and logical connections between extracted memories. If the text contains cause-effect, reasoning, or contradictions, you MUST extract them as relations."#);
         } else {
             prompt.push_str(r#",
   "relations": []"#);
