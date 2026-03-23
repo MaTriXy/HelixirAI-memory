@@ -49,13 +49,14 @@ services:
     environment:
       - HELIX_HOST=helixdb
       - HELIX_PORT=6969
-      - LLM_PROVIDER=${LLM_PROVIDER:-cerebras}
-      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b}
-      - LLM_API_KEY=${LLM_API_KEY}
-      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-mpnet-base-v2}
-      - EMBEDDING_URL=${EMBEDDING_URL:-https://openrouter.ai/api/v1}
-      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - HELIX_LLM_PROVIDER=${HELIX_LLM_PROVIDER:-cerebras}
+      - HELIX_LLM_MODEL=${HELIX_LLM_MODEL:-llama-3.3-70b}
+      - HELIX_LLM_API_KEY=${HELIX_LLM_API_KEY}
+      - HELIX_LLM_BASE_URL=${HELIX_LLM_BASE_URL:-}
+      - HELIX_EMBEDDING_PROVIDER=${HELIX_EMBEDDING_PROVIDER:-openai}
+      - HELIX_EMBEDDING_MODEL=${HELIX_EMBEDDING_MODEL:-sentence-transformers/all-mpnet-base-v2}
+      - HELIX_EMBEDDING_URL=${HELIX_EMBEDDING_URL:-https://openrouter.ai/api/v1}
+      - HELIX_EMBEDDING_API_KEY=${HELIX_EMBEDDING_API_KEY}
       - RUST_LOG=helixir=warn,helixir::mcp=info
     depends_on:
       helixdb:
@@ -74,8 +75,8 @@ volumes:
 # Usage:
 #
 # 1. Create .env file with API keys:
-#    LLM_API_KEY=your_cerebras_key
-#    EMBEDDING_API_KEY=your_openrouter_key
+#    HELIX_LLM_API_KEY=your_cerebras_key
+#    HELIX_EMBEDDING_API_KEY=your_openrouter_key
 #
 # 2. Start services:
 #    docker-compose up -d

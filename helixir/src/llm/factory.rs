@@ -29,8 +29,8 @@ impl LlmProviderFactory {
                 temperature,
             )),
             "ollama" => Box::new(OllamaProvider::new(
-                model.to_string(),
                 base_url.unwrap_or(DEFAULT_OLLAMA_URL).to_string(),
+                model.to_string(),
                 temperature,
             )),
             _ => panic!("Unknown provider: {provider}. Supported: cerebras, ollama"),
@@ -96,6 +96,20 @@ mod tests {
             0.7,
         );
         assert_eq!(provider.provider_name(), "ollama");
+        assert_eq!(provider.model_name(), "llama3.1:8b");
+    }
+
+    #[test]
+    fn test_ollama_custom_base_url() {
+        let provider = LlmProviderFactory::create(
+            "ollama",
+            "gemma2:9b",
+            None,
+            Some("http://192.168.1.100:11434"),
+            0.5,
+        );
+        assert_eq!(provider.provider_name(), "ollama");
+        assert_eq!(provider.model_name(), "gemma2:9b");
     }
 
     #[test]
