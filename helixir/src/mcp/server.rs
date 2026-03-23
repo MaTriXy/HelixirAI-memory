@@ -164,7 +164,7 @@ impl HelixirMcpServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Search memories by ontology concepts. Concept types: 'skill', 'preference', 'goal', 'fact', 'opinion', 'experience', 'achievement'. Returns: [{memory_id, content, concept_score}]")]
+    #[tool(description = "Search memories by ontology concepts. Concept types: 'skill', 'preference', 'goal', 'fact', 'opinion', 'experience', 'achievement', 'action'. Returns: [{memory_id, content, concept_score}]")]
     async fn search_by_concept(
         &self,
         Parameters(params): Parameters<SearchByConceptParams>,

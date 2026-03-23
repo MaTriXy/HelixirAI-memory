@@ -26,8 +26,16 @@ lazy_static! {
             r"\b(what do i think|my (opinion|view|thoughts))\b",
         ]);
         m.insert("experience", vec![
-            r"\b(did|have i|was i|when did|remember when)\b",
+            r"\b(have i|was i|when did|remember when)\b",
             r"\b(my (experience|history) with)\b",
+        ]);
+        m.insert("achievement", vec![
+            r"\b(achieved|accomplished|completed|finished|won|built|earned)\b",
+            r"\b(my (achievements|accomplishments|milestones))\b",
+        ]);
+        m.insert("action", vec![
+            r"\b(did i|i did|i ran|i executed|i performed|i deployed)\b",
+            r"\b(what did i (do|run|execute|perform|deploy))\b",
         ]);
         m.insert("recent", vec![
             r"\b(today|yesterday|recently|lately|just now|this week)\b",
@@ -63,6 +71,8 @@ pub fn intent_to_concept(intent: &str) -> Option<&'static str> {
         "fact" => Some("Fact"),
         "opinion" => Some("Opinion"),
         "experience" => Some("Experience"),
+        "achievement" => Some("Achievement"),
+        "action" => Some("Action"),
         "recent" => None,
         _ => None,
     }

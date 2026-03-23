@@ -148,7 +148,7 @@ impl<P: LlmProvider> LlmExtractor<P> {
         let mut prompt = String::from(
             r#"You are a memory extraction system. Analyze the text and extract structured information.
 
-Each extracted memory MUST have a memory_type from EXACTLY one of these 7 types:
+Each extracted memory MUST have a memory_type from EXACTLY one of these 8 types:
 
 - "fact": Objective information, knowledge, or statements about the world.
   Example: "The Earth orbits the Sun" or "Rust is a systems programming language"
@@ -166,13 +166,16 @@ Each extracted memory MUST have a memory_type from EXACTLY one of these 7 types:
 - "achievement": A specific accomplishment, milestone, or completed goal.
   Example: "I achieved winning a tournament" or "I built a working compiler"
   NOTE: "I achieved X" or "I built/completed/finished X" is ALWAYS an achievement, never an experience.
+- "action": A specific action performed, a task executed, or an operation carried out.
+  Example: "I deployed the server" or "I ran the database migration"
+  NOTE: "I did X", "I ran X", "I executed X", "I performed X" is ALWAYS an action, not an experience or fact.
 
 Output JSON with this structure:
 {
   "memories": [
     {
       "text": "atomic standalone fact",
-      "memory_type": "fact|preference|skill|goal|opinion|experience|achievement",
+      "memory_type": "fact|preference|skill|goal|opinion|experience|achievement|action",
       "certainty": 80,
       "importance": 50,
       "entities": ["entity_id1", "entity_id2"],
@@ -259,7 +262,7 @@ Rules:
 - Extract atomic, standalone facts. Each memory must be self-contained and express EXACTLY ONE idea.
 - CRITICAL: If the input contains multiple facts, numbered lists, or compound statements joined by "and"/"also"/"additionally", you MUST split them into separate memories. Example: "I like Rust and Python" → two memories: "I like Rust" and "I like Python".
 - Never merge or consolidate distinct pieces of information into a single memory. More granular = better.
-- Use ALL 7 memory_type values when appropriate. Do not collapse skill/achievement into fact/experience.
+- Use ALL 8 memory_type values when appropriate. Do not collapse skill/achievement into fact/experience, and do not collapse action into experience.
 - "skilled at", "can", "able to", "expert in" → always "skill".
 - "achieved", "built", "completed", "finished", "won" → always "achievement".
 - When uncertain between two types, prefer the more specific one (skill > fact, achievement > experience).

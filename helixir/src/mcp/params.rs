@@ -55,7 +55,7 @@ pub struct SearchByConceptParams {
     pub query: String,
     #[schemars(description = "User identifier")]
     pub user_id: String,
-    #[schemars(description = "Concept type: 'skill', 'preference', 'goal', 'fact', 'opinion', 'experience', 'achievement'")]
+    #[schemars(description = "Concept type: 'skill', 'preference', 'goal', 'fact', 'opinion', 'experience', 'achievement', 'action'")]
     pub concept_type: Option<String>,
     #[schemars(description = "Comma-separated tags to filter by")]
     pub tags: Option<String>,

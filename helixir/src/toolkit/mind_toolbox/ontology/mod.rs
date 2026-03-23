@@ -107,26 +107,26 @@ impl OntologyManager {
         };
 
         if let Some(mt) = memory_type {
-            let concept_id = match mt.to_lowercase().as_str() {
-                "preference" => Some("Preference"),
-                "skill" => Some("Skill"),
-                "goal" => Some("Goal"),
-                "opinion" => Some("Opinion"),
-                "fact" => Some("Fact"),
-                "action" => Some("Action"),
-                "experience" => Some("Experience"),
-                "achievement" => Some("Achievement"),
+            let concept_pair = match mt.to_lowercase().as_str() {
+                "preference" => Some(("Preference", mapper::ConceptType::Preference)),
+                "skill" => Some(("Skill", mapper::ConceptType::Skill)),
+                "goal" => Some(("Goal", mapper::ConceptType::Goal)),
+                "opinion" => Some(("Opinion", mapper::ConceptType::Opinion)),
+                "fact" => Some(("Fact", mapper::ConceptType::Fact)),
+                "action" => Some(("Action", mapper::ConceptType::Action)),
+                "experience" => Some(("Experience", mapper::ConceptType::Experience)),
+                "achievement" => Some(("Achievement", mapper::ConceptType::Achievement)),
                 _ => None,
             };
 
-            if let Some(cid) = concept_id {
+            if let Some((cid, ctype)) = concept_pair {
                 let already_linked = matches.iter().any(|m| m.concept.id == cid);
                 if !already_linked {
                     matches.push(ConceptMatch {
                         concept: TextConcept {
                             id: cid.to_string(),
                             name: cid.to_string(),
-                            concept_type: mapper::ConceptType::Goal,
+                            concept_type: ctype,
                         },
                         confidence: 0.9,
                         matched_keywords: vec![format!("memory_type={}", mt)],

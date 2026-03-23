@@ -140,7 +140,7 @@ You have multiple cognitive roles. Activate the appropriate role based on user r
 
 ## CONCEPT TYPES (for search_by_concept)
 
-`skill`, `preference`, `goal`, `fact`, `opinion`, `experience`, `achievement`
+`skill`, `preference`, `goal`, `fact`, `opinion`, `experience`, `achievement`, `action`
 
 ## CHAIN MODES (for search_reasoning_chain)
 
