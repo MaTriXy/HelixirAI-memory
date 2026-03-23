@@ -12,6 +12,8 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#how-it-works">How It Works</a> &middot;
+  <a href="#ontology">Ontology</a> &middot;
+  <a href="#graph-schema">Graph Schema</a> &middot;
   <a href="#mcp-tools">MCP Tools</a> &middot;
   <a href="#configuration">Configuration</a>
 </p>
@@ -29,33 +31,17 @@
 
 Helixir gives AI agents **memory that persists between sessions**. When an agent powered by Helixir starts a new conversation, it recalls past decisions, preferences, goals, and reasoning chains — not from a flat log, but from a **graph of interconnected facts**.
 
-Every piece of information is LLM-extracted into atomic facts, classified by ontology (skill, preference, goal, fact, opinion, experience, achievement, action), linked to named entities, and stored with vector embeddings for semantic search. Duplicate detection, contradiction tracking, and supersession happen automatically.
+Every piece of information is LLM-extracted into atomic facts, classified by ontology (8 types), linked to named entities, and stored with vector embeddings for semantic search. Duplicate detection, contradiction tracking, and supersession happen automatically.
 
 Built on [HelixDB](https://github.com/HelixDB/helix-db) (graph + vector database) with native [MCP](https://modelcontextprotocol.io/) support for Cursor, Claude Desktop, and any MCP-compatible client.
 
-### Why this approach?
-
-| Flat memory (key-value, embeddings only) | Helixir (graph + vector + ontology) |
+| Flat memory (key-value / embeddings only) | Helixir (graph + vector + ontology) |
 |:-----------------------------------------|:------------------------------------|
 | Retrieves similar text chunks | Retrieves facts **and their connections** |
 | No deduplication — grows forever | Smart dedup: ADD / UPDATE / SUPERSEDE / NOOP |
 | No reasoning trail | Causal chains: A BECAUSE B, A IMPLIES C |
 | All memories equal | Ontology: skills vs preferences vs goals |
 | Single-user | Cross-user: shared facts, conflict detection |
-
-### By the numbers
-
-| Metric | Value |
-|:-------|:------|
-| Memory node types | 15 (Memory, Entity, Concept, Context, ...) |
-| Edge types | 33 (24 active in pipeline, 9 reserved for future features) |
-| Ontology types | 8 (fact, preference, skill, goal, opinion, experience, achievement, action) |
-| MCP tools | 14 |
-| Search modes | 4 (recent/4h, contextual/30d, deep/90d, full) |
-| Reasoning relations | 4 (IMPLIES, BECAUSE, CONTRADICTS, SUPPORTS) |
-| Startup time | ~50ms |
-| Memory footprint | ~15MB |
-| Test coverage | 48 unit tests passing |
 
 ---
 
@@ -77,18 +63,12 @@ The script will:
 Or install manually:
 
 ```bash
-# Clone
 git clone https://github.com/nickorulenko/helixir.git
 cd helixir
 
-# Build
-make build
-
-# Start HelixDB + deploy schema
-make setup
-
-# Show MCP config to paste into your IDE
-make config
+make build          # Build release binary
+make setup          # Start HelixDB + deploy schema
+make config         # Print MCP config to paste into your IDE
 ```
 
 ### Prerequisites
@@ -105,27 +85,27 @@ make config
 ## How It Works
 
 ```
-               Input: "I deployed the server to AWS and prefer using Terraform"
-                                          |
-                                    LLM Extraction
-                                          |
-                          +---------------+---------------+
-                          |                               |
-                  Memory: "I deployed         Memory: "I prefer
-                  the server to AWS"          using Terraform"
-                  type: action                type: preference
-                          |                               |
-                    +-----+-----+                   +-----+-----+
-                    |           |                   |           |
-                Entity:     Entity:            Entity:      Concept:
-                "AWS"       "server"           "Terraform"  Preference
-                          |
-                    Phase 1: Personal search (dedup check)
-                    Phase 2: Cross-user search (shared facts)
-                          |
-                    Decision: ADD / UPDATE / SUPERSEDE / NOOP
-                          |
-                    Store in HelixDB (graph + vector)
+           Input: "I deployed the server to AWS and prefer using Terraform"
+                                      |
+                                LLM Extraction
+                                      |
+                      +---------------+---------------+
+                      |                               |
+              Memory: "I deployed         Memory: "I prefer
+              the server to AWS"          using Terraform"
+              type: action                type: preference
+                      |                               |
+                +-----+-----+                   +-----+-----+
+                |           |                   |           |
+            Entity:     Entity:            Entity:      Concept:
+            "AWS"       "server"           "Terraform"  Preference
+                      |
+                Phase 1: Personal search (dedup check)
+                Phase 2: Cross-user search (shared facts)
+                      |
+                Decision: ADD / UPDATE / SUPERSEDE / NOOP
+                      |
+                Store in HelixDB (graph + vector)
 ```
 
 ### Architecture
@@ -152,6 +132,124 @@ Engine  Reasoning Manager    |
 ```
 
 See full architectural diagrams in [`helixir/diagrams/`](helixir/diagrams/).
+
+---
+
+## Ontology
+
+Every memory is classified into one of **8 concept types**. The LLM extractor assigns the type during ingestion; `search_by_concept` retrieves memories by type.
+
+| Type | What it captures | Example |
+|:-----|:-----------------|:--------|
+| **fact** | Objective knowledge, statements about the world | "Rust compiles to native code" |
+| **preference** | Likes, dislikes, tastes, favorites | "I prefer dark mode in all editors" |
+| **skill** | Abilities, competencies, expertise | "I can write fluent Python" |
+| **goal** | Plans, aspirations, objectives | "I want to learn Japanese this year" |
+| **opinion** | Subjective beliefs, judgments, viewpoints | "I think remote work is more productive" |
+| **experience** | Past events, situations lived through | "I lived in Berlin for 3 years" |
+| **achievement** | Accomplished milestones, completed goals | "I built a working compiler from scratch" |
+| **action** | Specific tasks performed, operations executed | "I deployed the CI/CD pipeline yesterday" |
+
+### Ontology hierarchy
+
+The concept types are organized into a tree stored in HelixDB:
+
+```
+Thing
+  ├── Attribute
+  │     ├── Fact
+  │     ├── Preference
+  │     ├── Skill
+  │     ├── Goal
+  │     ├── Opinion
+  │     └── Trait
+  ├── Event
+  │     ├── Action
+  │     ├── Experience
+  │     └── Achievement
+  ├── Entity
+  │     ├── Person
+  │     ├── Organization
+  │     ├── Location
+  │     ├── Object
+  │     └── Technology
+  ├── Relation
+  └── State
+```
+
+The hierarchy enables traversal: searching for "Attribute" returns all facts, preferences, skills, goals, and opinions. Entity types (Person, Organization, etc.) are used for extracted named entities.
+
+---
+
+## Graph Schema
+
+Helixir stores everything as a typed graph: **15 node types** connected by **33 edge types**.
+
+### Node types
+
+| Node | Purpose | Key fields |
+|:-----|:--------|:-----------|
+| **Memory** | Core unit — one atomic fact | content, memory_type, certainty, importance, user_id |
+| **User** | Owner of memories | user_id, name |
+| **Entity** | Named thing extracted from text | name, entity_type, aliases |
+| **Concept** | Ontology node (Fact, Skill, Goal...) | name, level, parent_id |
+| **Context** | Situational scope (work, personal...) | name, context_type |
+| **Session** | Conversation session | session_id, status |
+| **Agent** | AI agent that created a memory | agent_id, role, capabilities |
+| **HistoryEvent** | Audit log entry for a memory | action, old_value, new_value, timestamp |
+| **MemoryChunk** | Fragment of a long memory | content, position, token_count |
+| **Reasoning** | Reasoning node | reasoning_type, confidence |
+| **Constraint** | Rule applied in a context | rule, constraint_type, priority |
+| **MemoryEmbedding** | Vector embedding (search index) | content, created_at |
+| **EntityEmbedding** | Vector embedding for entity search | name |
+| **DocPage / DocChunk / CodeExample / ErrorCode** | Documentation pipeline (reserved) | — |
+
+### Edge types (active)
+
+These 24 edge types are used in the current pipeline:
+
+| Edge | From → To | What it means |
+|:-----|:----------|:--------------|
+| **HAS_MEMORY** | User → Memory | User owns this memory |
+| **INSTANCE_OF** | Memory → Concept | Memory is of this ontology type |
+| **BELONGS_TO_CATEGORY** | Memory → Concept | Memory belongs to this category |
+| **MENTIONS** | Memory → Entity | Memory mentions this entity |
+| **EXTRACTED_ENTITY** | Memory → Entity | Entity was LLM-extracted from this memory |
+| **RELATES_TO** | Entity → Entity | Two entities are related (typed: works_at, uses, etc.) |
+| **VALID_IN** | Memory → Context | Memory applies in this context (work, personal...) |
+| **OCCURRED_IN** | Memory → Context | Memory is about an event in this context |
+| **AGENT_CREATED** | Agent → Memory | This agent created the memory |
+| **HAS_HISTORY** | Memory → HistoryEvent | Audit trail: who changed what and when |
+| **HAS_CHUNK** | Memory → MemoryChunk | Memory split into chunks (long texts) |
+| **NEXT_CHUNK** | MemoryChunk → MemoryChunk | Sequential chunk ordering |
+| **CHUNK_HAS_EMBEDDING** | MemoryChunk → MemoryEmbedding | Chunk's vector index |
+| **MEMORY_RELATION** | Memory → Memory | General relation between memories (typed) |
+| **IMPLIES** | Memory → Memory | A logically leads to B |
+| **BECAUSE** | Memory → Memory | A is the reason for B |
+| **CONTRADICTS** | Memory → Memory | A conflicts with B |
+| **SUPERSEDES** | Memory → Memory | A replaces outdated B |
+| **HAS_EMBEDDING** | Memory → MemoryEmbedding | Memory's vector index for semantic search |
+| **ENTITY_HAS_EMBEDDING** | Entity → EntityEmbedding | Entity's vector index |
+| **HAS_SUBTYPE** | Concept → Concept | Ontology hierarchy (Attribute → Skill) |
+| **PAGE_TO_CHUNK** | DocPage → DocChunk | Documentation structure |
+| **CHUNK_TO_EMBEDDING** | DocChunk → ChunkEmbedding | Documentation vector index |
+| **SUPPORTS** | Memory → Memory | A provides evidence for B |
+
+### Edge types (reserved)
+
+These 9 edge types are defined in the schema with HQL queries ready, but not yet called from the Rust pipeline. They are infrastructure for planned features:
+
+| Edge | From → To | Planned use |
+|:-----|:----------|:------------|
+| IN_SESSION | User → Session | Session tracking |
+| CREATED_IN | Memory → Session | Which session created this memory |
+| IS_A | Concept → Concept | Dynamic ontology extension |
+| CONCEPT_RELATED_TO | Concept → Concept | Cross-concept links |
+| PART_OF | Entity → Entity | Hierarchical entity relations |
+| APPLIES_IN | Constraint → Context | Constraint scoping |
+| CHUNK_MENTIONS_CONCEPT | DocChunk → Concept | Documentation ↔ ontology links |
+| CONCEPT_HAS_EXAMPLE | Concept → CodeExample | Code examples per concept |
+| ERROR_REFERENCES_CONCEPT | ErrorCode → Concept | Error catalog |
 
 ---
 
@@ -332,17 +430,8 @@ make test           # Run all tests
 make check          # cargo check + clippy
 make run            # Run MCP server locally (debug)
 make deploy-schema  # Deploy schema to running HelixDB
-make docker-up      # Start full stack via Docker Compose
-make docker-down    # Stop Docker stack
-```
-
-Or directly:
-
-```bash
-cargo build --release                          # Build
-cargo test                                     # Test (48 tests)
-cargo clippy                                   # Lint
-RUST_LOG=helixir=debug cargo run --bin helixir-mcp  # Run with debug logs
+make docker-up      # Start HelixDB container
+make docker-down    # Stop HelixDB container
 ```
 
 ### Project structure
@@ -357,13 +446,13 @@ helixir-rs/
       core/                     # Config, client, search modes
       db/                       # HelixDB client
       llm/                      # LLM providers, extractor, decision engine
-      mcp/                      # MCP server, params, prompts
+      mcp/                      # MCP server, params, cognitive protocol
       toolkit/
-        tooling_manager/        # Main pipeline (add, search, CRUD)
+        tooling_manager/        # Main pipeline (add, search, CRUD, events)
         mind_toolbox/           # Search engine, entity, ontology, reasoning
         fast_think/             # Working memory (petgraph-based)
     schema/
-      schema.hx                 # HelixDB node/edge definitions (33 edge types, 15 node types)
+      schema.hx                 # Node/edge definitions (15 nodes, 33 edges)
       queries.hx                # HQL queries (100+)
     diagrams/                   # Architecture diagrams (D2 + PNG)
     Dockerfile
