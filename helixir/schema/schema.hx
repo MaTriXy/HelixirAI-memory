@@ -18,7 +18,7 @@ N::Agent {
   name: String,
   role: String,
   capabilities: String,
-  version: String,
+  agent_version: String,
   created_at: String
 }
 E::IN_SESSION {

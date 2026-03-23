@@ -3,11 +3,15 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::{debug, info, warn};
 use super::models::{SearchResult, edge_weights};
 use super::scoring::{calculate_temporal_freshness, calculate_graph_score};
 use crate::db::HelixClient;
+
+fn nullable_string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(d).map(|o| o.unwrap_or_default())
+}
 
 
 #[derive(Debug, thiserror::Error)]
@@ -29,13 +33,15 @@ struct VectorSearchResponse {
 
 #[derive(Debug, Deserialize, Clone)]
 struct VectorMemory {
+    #[serde(default, deserialize_with = "nullable_string")]
     memory_id: String,
+    #[serde(default, deserialize_with = "nullable_string")]
     content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     memory_type: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     user_id: String,
 }
 
@@ -63,11 +69,13 @@ struct GraphConnectionsResponse {
 
 #[derive(Debug, Deserialize)]
 struct ConnectedMemory {
+    #[serde(default, deserialize_with = "nullable_string")]
     memory_id: String,
+    #[serde(default, deserialize_with = "nullable_string")]
     content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_string")]
     memory_type: String,
 }
 

@@ -1,8 +1,13 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Deserializer};
 use tracing::{info, debug};
 
 use super::helpers::safe_truncate;
+
+fn nullable_string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(d).map(|o| o.unwrap_or_default())
+}
 use super::types::{SearchMemoryResult, ToolingError};
 use super::ToolingManager;
 
@@ -59,9 +64,13 @@ impl ToolingManager {
 
         #[derive(serde::Deserialize)]
         struct TaggedMemory {
+            #[serde(default, deserialize_with = "nullable_string")]
             memory_id: String,
+            #[serde(default, deserialize_with = "nullable_string")]
             content: String,
+            #[serde(default, deserialize_with = "nullable_string")]
             context_tags: String,
+            #[serde(default, deserialize_with = "nullable_string")]
             created_at: String,
         }
 
@@ -135,9 +144,9 @@ impl ToolingManager {
 
                 #[derive(serde::Deserialize)]
                 struct ConceptNode {
-                    #[serde(default)]
+                    #[serde(default, deserialize_with = "nullable_string")]
                     concept_id: String,
-                    #[serde(default)]
+                    #[serde(default, deserialize_with = "nullable_string")]
                     name: String,
                 }
 
@@ -224,13 +233,13 @@ impl ToolingManager {
             }
             #[derive(serde::Deserialize)]
             struct FallbackMemory {
-                #[serde(default)]
+                #[serde(default, deserialize_with = "nullable_string")]
                 memory_id: String,
-                #[serde(default)]
+                #[serde(default, deserialize_with = "nullable_string")]
                 content: String,
-                #[serde(default)]
+                #[serde(default, deserialize_with = "nullable_string")]
                 memory_type: String,
-                #[serde(default)]
+                #[serde(default, deserialize_with = "nullable_string")]
                 created_at: String,
             }
 

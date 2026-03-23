@@ -1,7 +1,12 @@
+use serde::{Deserialize, Deserializer};
 use tracing::{info, debug};
 
 use super::types::ToolingError;
 use super::ToolingManager;
+
+fn nullable_string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(d).map(|o| o.unwrap_or_default())
+}
 
 impl ToolingManager {
     pub async fn get_memory_graph(
@@ -26,8 +31,9 @@ impl ToolingManager {
             }
             #[derive(serde::Deserialize)]
             struct MemoryNode {
+                #[serde(default, deserialize_with = "nullable_string")]
                 memory_id: String,
-                #[serde(default)]
+                #[serde(default, deserialize_with = "nullable_string")]
                 content: String,
             }
 
@@ -63,10 +69,11 @@ impl ToolingManager {
                 }
                 #[derive(serde::Deserialize)]
                 struct MemoryData {
+                    #[serde(default, deserialize_with = "nullable_string")]
                     memory_id: String,
-                    #[serde(default)]
+                    #[serde(default, deserialize_with = "nullable_string")]
                     content: String,
-                    #[serde(default)]
+                    #[serde(default, deserialize_with = "nullable_string")]
                     memory_type: String,
                 }
 
@@ -104,8 +111,9 @@ impl ToolingManager {
                 }
                 #[derive(serde::Deserialize)]
                 struct ConnectedMemory {
+                    #[serde(default, deserialize_with = "nullable_string")]
                     memory_id: String,
-                    #[serde(default)]
+                    #[serde(default, deserialize_with = "nullable_string")]
                     content: String,
                 }
 

@@ -1,6 +1,10 @@
 use std::sync::Arc;
 use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+fn nullable_string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(d).map(|o| o.unwrap_or_default())
+}
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
@@ -26,14 +30,23 @@ struct VectorSearchInput {
 
 #[derive(Serialize, Deserialize)]
 struct VectorSearchMemory {
+    #[serde(default, deserialize_with = "nullable_string")]
     memory_id: String,
+    #[serde(default, deserialize_with = "nullable_string")]
     content: String,
+    #[serde(default)]
     similarity_score: f64,
+    #[serde(default, deserialize_with = "nullable_string")]
     memory_type: String,
+    #[serde(default, deserialize_with = "nullable_string")]
     user_id: String,
+    #[serde(default, deserialize_with = "nullable_string")]
     created_at: String,
+    #[serde(default, deserialize_with = "nullable_string")]
     updated_at: String,
+    #[serde(default, deserialize_with = "nullable_string")]
     valid_from: String,
+    #[serde(default)]
     valid_until: Option<String>,
 }
 

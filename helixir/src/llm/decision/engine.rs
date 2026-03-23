@@ -25,7 +25,7 @@ impl LLMDecisionEngine {
 
         Self {
             llm,
-            similarity_threshold: 0.92,
+            similarity_threshold: 0.70,
         }
     }
 
