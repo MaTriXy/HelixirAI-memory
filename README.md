@@ -50,7 +50,7 @@ Built on [HelixDB](https://github.com/HelixDB/helix-db) (graph + vector database
 ### One-command install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nickorulenko/helixir/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nikita-rulenko/Helixir/main/install.sh | bash
 ```
 
 The script will:
@@ -63,7 +63,7 @@ The script will:
 Or install manually:
 
 ```bash
-git clone https://github.com/nickorulenko/helixir.git
+git clone https://github.com/nikita-rulenko/Helixir.git
 cd helixir
 
 make build          # Build release binary

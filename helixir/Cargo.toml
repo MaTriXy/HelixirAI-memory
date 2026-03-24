@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["Nikita Rulenko (x.com/dengoslav)"]
 description = "Ontological memory for LLMs - Rust implementation"
 license = "MIT"
-repository = "https://github.com/nickorulenko/helixir"
+repository = "https://github.com/nikita-rulenko/Helixir"
 keywords = ["ai", "memory", "llm", "graph", "mcp"]
 categories = ["science", "database"]
 

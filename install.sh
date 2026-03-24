@@ -3,7 +3,7 @@
 # Helixir Installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/nickorulenko/helixir/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/nikita-rulenko/Helixir/main/install.sh | bash
 #
 # Or with custom install directory:
 #   curl -fsSL ... | bash -s -- --dir ~/my-tools/helixir
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 VERSION="0.1.0"
-REPO="https://github.com/nickorulenko/helixir.git"
+REPO="https://github.com/nikita-rulenko/Helixir.git"
 DEFAULT_DIR="$HOME/.helixir"
 HELIX_PORT=6969
 
