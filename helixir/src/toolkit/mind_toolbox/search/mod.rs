@@ -299,12 +299,22 @@ impl SearchEngine {
         let mut final_results = results;
 
         if (scope == "collective" || scope == "all") && !final_results.is_empty() {
-            for result in &mut final_results {
-                if let Ok(user_count) = self.fetch_memory_user_count(&result.memory_id).await {
-                    result.user_count = Some(user_count);
+            let enrichment_futures: Vec<_> = final_results.iter().map(|r| {
+                let mem_id = r.memory_id.clone();
+                let uid = user_id.to_string();
+                let client = Arc::clone(&self.client);
+                async move {
+                    let user_count = Self::fetch_memory_user_count_static(&client, &mem_id).await.ok();
+                    let controversy = Self::fetch_controversy_static(&client, &mem_id, &uid).await.ok().flatten();
+                    (mem_id, user_count, controversy)
                 }
-                if let Ok(controversy) = self.fetch_controversy(&result.memory_id, user_id).await {
-                    result.controversy = controversy;
+            }).collect();
+
+            let enrichments = futures::future::join_all(enrichment_futures).await;
+            for (mem_id, user_count, controversy) in enrichments {
+                if let Some(r) = final_results.iter_mut().find(|r| r.memory_id == mem_id) {
+                    r.user_count = user_count;
+                    r.controversy = controversy;
                 }
             }
         }
@@ -318,14 +328,55 @@ impl SearchEngine {
         Ok(final_results)
     }
 
-    async fn fetch_memory_user_count(&self, memory_id: &str) -> Result<u32, SearchError> {
+    pub async fn search_for_dedup(
+        &self,
+        query: &str,
+        query_embedding: &[f32],
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<UnifiedSearchResult>, SearchError> {
+        let query_preview: String = query.chars().take(30).collect();
+        info!("SearchEngine.search_for_dedup: query='{}...', user={}, limit={}", query_preview, user_id, limit);
+
+        if let Some(ref traversal) = self.smart_traversal {
+            let config = self.make_search_config(
+                limit,
+                2,
+                self.config.search_thresholds.min_vector_score,
+                self.config.search_thresholds.min_combined_score,
+            );
+            let results = traversal
+                .search(query, query_embedding, None, config, None)
+                .await
+                .unwrap_or_default();
+
+            Ok(results
+                .into_iter()
+                .take(limit)
+                .map(|r| UnifiedSearchResult {
+                    memory_id: r.memory_id,
+                    content: r.content,
+                    score: r.combined_score as f32,
+                    method: "dedup_collective".to_string(),
+                    metadata: r.metadata.unwrap_or_default(),
+                    created_at: r.created_at.unwrap_or_default(),
+                    user_count: None,
+                    controversy: None,
+                })
+                .collect())
+        } else {
+            self.vector_search_unified(query, None, limit).await
+        }
+    }
+
+    async fn fetch_memory_user_count_static(client: &HelixClient, memory_id: &str) -> Result<u32, SearchError> {
         #[derive(serde::Deserialize)]
         struct UsersResult {
             #[serde(default)]
             users: Vec<serde_json::Value>,
         }
 
-        let result: UsersResult = self.client
+        let result: UsersResult = client
             .execute_query("getMemoryUsers", &serde_json::json!({"memory_id": memory_id}))
             .await
             .map_err(|e| SearchError::InvalidMode(e.to_string()))?;
@@ -333,8 +384,8 @@ impl SearchEngine {
         Ok(result.users.len().max(1) as u32)
     }
 
-    async fn fetch_controversy(
-        &self,
+    async fn fetch_controversy_static(
+        client: &HelixClient,
         memory_id: &str,
         current_user_id: &str,
     ) -> Result<Option<ControversyInfo>, SearchError> {
@@ -356,7 +407,7 @@ impl SearchEngine {
             user_id: String,
         }
 
-        let result: ContradictionsResult = self.client
+        let result: ContradictionsResult = client
             .execute_query("getMemoryContradictions", &serde_json::json!({"memory_id": memory_id}))
             .await
             .map_err(|e| SearchError::InvalidMode(e.to_string()))?;

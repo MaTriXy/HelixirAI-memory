@@ -116,7 +116,7 @@ pub struct HelixirClient {
     db: Arc<HelixClient>,
     embedder: Arc<EmbeddingGenerator>,
     llm_provider: Arc<dyn LlmProvider>,
-    tooling_manager: ToolingManager,
+    tooling_manager: Arc<ToolingManager>,
     is_initialized: Arc<AtomicBool>,
 }
 
@@ -153,12 +153,12 @@ impl HelixirClient {
         ).into();
 
         
-        let tooling_manager = ToolingManager::new(
+        let tooling_manager = Arc::new(ToolingManager::new(
             Arc::clone(&db),
             Arc::clone(&embedder),
             Arc::clone(&llm_provider),
             &config,
-        );
+        ));
 
         info!("HelixirClient created with ToolingManager");
 

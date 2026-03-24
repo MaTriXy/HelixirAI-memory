@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::Serialize;
 use tracing::{info, debug, warn};
@@ -348,20 +349,13 @@ impl ToolingManager {
         user_id: &str,
         vector: &[f32],
         new_memory_id: &str,
-        relations_created: &mut usize,
+        _relations_created: &mut usize,
     ) -> Result<(), ToolingError> {
-        info!("Phase 2: Global cross-user dedup search for {} (user={})", new_memory_id, user_id);
+        info!("Phase 2: cross-user dedup for {} (user={})", new_memory_id, user_id);
         let global_results = self.search_engine
-            .search(&memory.text, vector, user_id, 10, "full", None, "collective")
+            .search_for_dedup(&memory.text, vector, user_id, 5)
             .await
             .unwrap_or_default();
-
-        info!("Phase 2: global search returned {} results", global_results.len());
-        for r in &global_results {
-            let r_user = r.metadata.get("user_id").and_then(|v| v.as_str()).unwrap_or("<none>");
-            debug!("  Phase 2 candidate: {} user={} score={:.3} '{}'",
-                r.memory_id, r_user, r.score, &r.content.chars().take(60).collect::<String>());
-        }
 
         let cross_user_similar: Vec<SimilarMemory> = global_results
             .iter()
@@ -383,45 +377,53 @@ impl ToolingManager {
             })
             .collect();
 
-        info!("Phase 2: found {} cross-user candidates after filtering", cross_user_similar.len());
+        if cross_user_similar.is_empty() {
+            debug!("Phase 2: no cross-user candidates found");
+            return Ok(());
+        }
 
-        if !cross_user_similar.is_empty() {
-            info!("Phase 2: sending {} candidates to LLM decision engine", cross_user_similar.len());
-            let cross_decision = self.decision_engine
-                .decide(&memory.text, &cross_user_similar, user_id)
+        info!("Phase 2: {} cross-user candidates, spawning background LLM decision", cross_user_similar.len());
+
+        let memory_text = memory.text.clone();
+        let user_id_owned = user_id.to_string();
+        let new_mem_id = new_memory_id.to_string();
+        let db = self.db.clone();
+        let decision_engine = self.decision_engine.clone();
+
+        tokio::spawn(async move {
+            let cross_decision = decision_engine
+                .decide(&memory_text, &cross_user_similar, &user_id_owned)
                 .await;
-            info!("Phase 2: LLM decided {:?} (confidence={})", cross_decision.operation, cross_decision.confidence);
+            info!("Phase 2 bg: LLM decided {:?} (confidence={})", cross_decision.operation, cross_decision.confidence);
 
             match cross_decision.operation {
                 MemoryOperation::LinkExisting => {
                     if let Some(link_id) = &cross_decision.link_to_memory_id {
-                        info!("LINK_EXISTING: linking user {} to existing memory {}", user_id, link_id);
-                        self.link_user_to_existing_memory(user_id, link_id).await;
+                        info!("Phase 2 bg: LINK_EXISTING user {} → memory {}", user_id_owned, link_id);
+                        link_user_to_memory_bg(&db, &user_id_owned, link_id).await;
                     }
                 }
                 MemoryOperation::CrossContradict => {
                     if let Some(contra_id) = &cross_decision.contradicts_memory_id {
-                        info!("CROSS_CONTRADICT: {} contradicts {} (cross-user)", new_memory_id, contra_id);
-                        self.add_cross_user_contradiction(
-                            new_memory_id,
-                            contra_id,
+                        info!("Phase 2 bg: CROSS_CONTRADICT {} ↔ {}", new_mem_id, contra_id);
+                        add_contradiction_bg(
+                            &db, &new_mem_id, contra_id,
                             cross_decision.conflict_type.as_deref().unwrap_or("preference"),
                             &cross_decision.reasoning,
                         ).await;
-                        *relations_created += 1;
                     }
                 }
                 MemoryOperation::Noop => {
-                    debug!("Cross-user check: same fact already shared, linking user");
                     if let Some(existing) = cross_user_similar.first() {
-                        self.link_user_to_existing_memory(user_id, &existing.id).await;
+                        info!("Phase 2 bg: NOOP→link user {} → memory {}", user_id_owned, existing.id);
+                        link_user_to_memory_bg(&db, &user_id_owned, &existing.id).await;
                     }
                 }
                 _ => {
-                    debug!("Cross-user check: no cross-user action needed");
+                    debug!("Phase 2 bg: no cross-user action needed");
                 }
             }
-        }
+        });
 
         Ok(())
     }
@@ -936,5 +938,67 @@ impl ToolingManager {
 
         debug!("Linked memory {} to context '{}'", memory_id, context_name);
         Ok(())
+    }
+}
+
+async fn link_user_to_memory_bg(db: &crate::db::HelixClient, user_id: &str, memory_id: &str) {
+    #[derive(Serialize)]
+    struct EnsureUser { user_id: String, name: String }
+    let _ = db.execute_query::<serde_json::Value, _>("getUser", &serde_json::json!({"user_id": user_id})).await
+        .or_else(|_| futures::executor::block_on(async {
+            db.execute_query::<serde_json::Value, _>("addUser", &EnsureUser {
+                user_id: user_id.to_string(),
+                name: user_id.to_string(),
+            }).await
+        }));
+
+    #[derive(Serialize)]
+    struct LinkInput { user_id: String, memory_id: String, context: String }
+    if let Err(e) = db.execute_query::<serde_json::Value, _>("linkUserToMemory", &LinkInput {
+        user_id: user_id.to_string(),
+        memory_id: memory_id.to_string(),
+        context: "cross_user_link".to_string(),
+    }).await {
+        warn!("Phase 2 bg: failed to link user {} to memory {}: {}", user_id, memory_id, e);
+        return;
+    }
+
+    #[derive(serde::Deserialize)]
+    struct UsersResult { #[serde(default)] users: Vec<serde_json::Value> }
+    let user_count = match db.execute_query::<UsersResult, _>("getMemoryUsers", &serde_json::json!({"memory_id": memory_id})).await {
+        Ok(r) => r.users.len().max(1) as i64,
+        Err(_) => 2,
+    };
+
+    #[derive(Serialize)]
+    struct UpdateCount { memory_id: String, user_count: i64, updated_at: String }
+    let _ = db.execute_query::<serde_json::Value, _>("updateMemoryUserCount", &UpdateCount {
+        memory_id: memory_id.to_string(),
+        user_count,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    }).await;
+
+    info!("Phase 2 bg: linked user {} to memory {} (user_count={})", user_id, memory_id, user_count);
+}
+
+async fn add_contradiction_bg(
+    db: &crate::db::HelixClient,
+    from_id: &str,
+    to_id: &str,
+    conflict_type: &str,
+    reasoning: &str,
+) {
+    #[derive(Serialize)]
+    struct ContradictInput { from_id: String, to_id: String, resolution: String, resolved: i64, resolution_strategy: String }
+    if let Err(e) = db.execute_query::<serde_json::Value, _>("addMemoryContradiction", &ContradictInput {
+        from_id: from_id.to_string(),
+        to_id: to_id.to_string(),
+        resolution: reasoning.to_string(),
+        resolved: 0,
+        resolution_strategy: format!("cross_user_{}", conflict_type),
+    }).await {
+        warn!("Phase 2 bg: failed to add contradiction {} → {}: {}", from_id, to_id, e);
+    } else {
+        info!("Phase 2 bg: added cross-user contradiction {} → {}", from_id, to_id);
     }
 }
