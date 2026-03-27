@@ -7,19 +7,23 @@ use sha2::{Sha256, Digest};
 use tracing::{debug, info, warn};
 use super::models::{SearchResult, SearchConfig, TraversalStats};
 use super::phases::{vector_search_phase, graph_expansion_phase, rank_and_filter, TraversalError};
+use super::scoring::cosine_similarity;
 use crate::db::HelixClient;
+use crate::llm::EmbeddingGenerator;
 
 pub struct SmartTraversalV2 {
     client: Arc<HelixClient>,
+    embedder: Arc<EmbeddingGenerator>,
     cache: RwLock<LruCache<String, Vec<SearchResult>>>,
     cache_ttl: Duration,
     stats: RwLock<TraversalStats>,
 }
 
 impl SmartTraversalV2 {
-    pub fn new(client: Arc<HelixClient>, cache_size: usize, cache_ttl_secs: u64) -> Self {
+    pub fn new(client: Arc<HelixClient>, embedder: Arc<EmbeddingGenerator>, cache_size: usize, cache_ttl_secs: u64) -> Self {
         Self {
             client,
+            embedder,
             cache: RwLock::new(LruCache::new(
                 std::num::NonZeroUsize::new(cache_size).unwrap()
             )),
@@ -62,7 +66,7 @@ impl SmartTraversalV2 {
         
         
         let phase1_start = Instant::now();
-        let vector_hits = vector_search_phase(
+        let mut vector_hits = vector_search_phase(
             Arc::clone(&self.client),
             query_embedding,
             user_id,
@@ -78,6 +82,36 @@ impl SmartTraversalV2 {
             stats.phase1_duration_ms = phase1_duration.as_millis() as f64;
             stats.total_duration_ms = total_duration.as_millis() as f64;
             return Ok(vec![]);
+        }
+
+        let rerank_start = Instant::now();
+        let texts: Vec<&str> = vector_hits.iter().map(|h| h.content.as_str()).collect();
+        match self.embedder.generate_batch(&texts, true).await {
+            Ok(embeddings) => {
+                let mut reranked = 0u32;
+                for (hit, emb) in vector_hits.iter_mut().zip(embeddings.iter()) {
+                    let real_score = cosine_similarity(query_embedding, emb);
+                    if (real_score - hit.vector_score).abs() > 0.01 {
+                        let temporal = hit.temporal_score;
+                        hit.vector_score = real_score;
+                        hit.combined_score = (real_score * config.vector_weight
+                            + temporal * config.temporal_weight)
+                            .clamp(0.0, 1.0);
+                        reranked += 1;
+                    }
+                }
+                vector_hits.sort_by(|a, b| b.combined_score.partial_cmp(&a.combined_score).unwrap());
+                let rerank_ms = rerank_start.elapsed().as_millis();
+                if reranked > 0 {
+                    let top = vector_hits.first().unwrap().combined_score;
+                    let bot = vector_hits.last().unwrap().combined_score;
+                    info!("Re-ranked {}/{} results with real cosine similarity in {}ms, scores {:.4}..{:.4}",
+                        reranked, vector_hits.len(), rerank_ms, top, bot);
+                }
+            }
+            Err(e) => {
+                warn!("Re-ranking failed (using rank-based scores): {}", e);
+            }
         }
         
         

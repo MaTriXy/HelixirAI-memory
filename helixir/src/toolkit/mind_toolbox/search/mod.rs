@@ -123,13 +123,13 @@ fn embedding_cache_key(embedding: &[f32]) -> String {
 impl SearchEngine {
     pub fn new(
         client: Arc<HelixClient>, 
-        _embedder: Arc<EmbeddingGenerator>,
+        embedder: Arc<EmbeddingGenerator>,
         config: SearchEngineConfig,
     ) -> Self {
         let vector = Arc::new(VectorSearch::new(Arc::clone(&client), config.cache_size, config.cache_ttl));
         let hybrid = HybridSearch::new(vector.clone(), config.vector_weight, config.bm25_weight);
         let smart_traversal = if config.enable_smart_traversal {
-            Some(SmartTraversalV2::new(Arc::clone(&client), config.cache_size, config.cache_ttl))
+            Some(SmartTraversalV2::new(Arc::clone(&client), Arc::clone(&embedder), config.cache_size, config.cache_ttl))
         } else {
             None
         };

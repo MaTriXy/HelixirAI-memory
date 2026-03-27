@@ -155,3 +155,12 @@ pub struct SearchIncompleteThoughtsParams {
     pub limit: Option<i32>,
 }
 
+#[derive(Debug, Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ListMemoriesParams {
+    #[schemars(description = "User identifier")]
+    pub user_id: String,
+    #[schemars(description = "Max results (default: 100)")]
+    pub limit: Option<i32>,
+    #[schemars(description = "Filter by memory type: fact, preference, skill, goal, opinion, experience, achievement, action")]
+    pub memory_type: Option<String>,
+}

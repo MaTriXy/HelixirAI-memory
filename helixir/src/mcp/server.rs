@@ -125,6 +125,48 @@ impl HelixirMcpServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    #[tool(description = "List all memories for a user without semantic search. Use for exhaustive queries, full-scan, counting, or when you need to see everything in the memory store. Returns: [{memory_id, content, memory_type, created_at, importance, certainty}]")]
+    async fn list_memories(
+        &self,
+        Parameters(params): Parameters<ListMemoriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(100) as i64;
+        info!("📋 Listing memories for user={}, limit={}", params.user_id, limit);
+
+        #[derive(serde::Deserialize)]
+        struct MemoriesResponse {
+            #[serde(default)]
+            memories: Vec<serde_json::Value>,
+        }
+
+        let result: MemoriesResponse = self.client.db()
+            .execute_query(
+                "getUserMemories",
+                &serde_json::json!({
+                    "user_id": params.user_id,
+                    "limit": limit
+                }),
+            )
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let mut memories = result.memories;
+
+        if let Some(ref mem_type) = params.memory_type {
+            memories.retain(|m| {
+                m.get("memory_type")
+                    .and_then(|v| v.as_str())
+                    .map(|t| t == mem_type.as_str())
+                    .unwrap_or(false)
+            });
+        }
+
+        info!("📋 Listed {} memories", memories.len());
+        let json = serde_json::to_string_pretty(&memories)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
     #[tool(description = "Update memory content (regenerates embedding & relations). Returns: {updated: bool, memory_id}")]
     async fn update_memory(
         &self,
@@ -523,7 +565,7 @@ impl ServerHandler for HelixirMcpServer {
                 .build(),
             server_info: Implementation {
                 name: "helixir".into(),
-                version: "0.2.2".into(),
+                version: "0.3.0".into(),
                 ..Default::default()
             },
             instructions: Some(prompts::get_server_instructions()),
@@ -556,7 +598,7 @@ impl ServerHandler for HelixirMcpServer {
                 let config = self.client.config();
                 
                 let content = serde_json::to_string_pretty(&json!({
-                    "version": "0.2.2",
+                    "version": "0.3.0",
                     "helixdb": {
                         "host": config.host,
                         "port": config.port,

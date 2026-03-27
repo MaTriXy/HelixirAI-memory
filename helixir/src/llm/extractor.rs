@@ -270,7 +270,14 @@ Rules:
 - "achieved", "built", "completed", "finished", "won" → always "achievement".
 - When uncertain between two types, prefer the more specific one (skill > fact, achievement > experience).
 - Extract entities for EVERY named thing: people, tools, languages, frameworks, systems, projects.
-- If you see causal or logical connections between extracted memories (cause→effect, evidence→conclusion, contradiction), you MUST include them in the "relations" array."#);
+- If you see causal or logical connections between extracted memories (cause→effect, evidence→conclusion, contradiction), you MUST include them in the "relations" array.
+
+STRUCTURAL DATA PRESERVATION:
+- If the input describes an API endpoint, include the HTTP method, path, and handler: "POST /api/v1/products is handled by ProductHandler.Create"
+- If the input lists tests, include test names AND what they verify: "TestIntegrationProductCRUD validates create/read/update/delete operations for Product entities in SQLite"
+- If the input describes code architecture (entities, layers, interfaces), preserve the full chain: "Product entity has fields: ID, Name, Price, CategoryID; repository interface defines CRUD + Search methods"
+- If the input describes dependency relationships, preserve the chain: "Handler depends on Usecase, Usecase depends on Repository, Repository depends on Entity"
+- NEVER drop structural details (field names, method signatures, endpoint paths, test lists) — these are critical for technical queries"#);
 
         prompt
     }

@@ -123,6 +123,29 @@ impl ToolingManager {
             &added_ids,
         ).await?;
 
+        if message.len() > 100 && added_ids.len() > 1 {
+            let raw_mem = ExtractedMemory {
+                text: message.to_string(),
+                memory_type: "fact".to_string(),
+                certainty: 70,
+                importance: 40,
+                entities: vec![],
+                context: None,
+            };
+            match self.embedder.generate(message, true).await {
+                Ok(raw_vec) => {
+                    match self.store_raw_source(&raw_mem, user_id, &raw_vec, tags).await {
+                        Ok(raw_id) => {
+                            debug!("Raw source stored: {}", raw_id);
+                            chunks_created += 1;
+                        }
+                        Err(e) => warn!("Failed to store raw source: {}", e),
+                    }
+                }
+                Err(e) => warn!("Failed to embed raw source: {}", e),
+            }
+        }
+
         info!(
             "Memory pipeline complete: {} added, {} updated, {} skipped, {} entities, {} relations",
             added_ids.len(), updated_ids.len(), skipped, entities_linked, relations_created
@@ -781,6 +804,87 @@ impl ToolingManager {
 
         debug!("Stored new memory: {}", memory_id);
         Ok((memory_id, chunk_count))
+    }
+
+    async fn store_raw_source(
+        &self,
+        memory: &ExtractedMemory,
+        user_id: &str,
+        vector: &[f32],
+        context_tags: &str,
+    ) -> Result<String, ToolingError> {
+        let memory_id = format!(
+            "raw_{}",
+            uuid::Uuid::new_v4().to_string().replace("-", "").chars().take(12).collect::<String>()
+        );
+        let now = chrono::Utc::now().to_rfc3339();
+
+        #[derive(Serialize)]
+        struct Input {
+            memory_id: String,
+            user_id: String,
+            content: String,
+            memory_type: String,
+            certainty: i64,
+            importance: i64,
+            created_at: String,
+            updated_at: String,
+            context_tags: String,
+            source: String,
+            metadata: String,
+        }
+
+        let input = Input {
+            memory_id: memory_id.clone(),
+            user_id: user_id.to_string(),
+            content: memory.text.clone(),
+            memory_type: memory.memory_type.clone(),
+            certainty: memory.certainty as i64,
+            importance: memory.importance as i64,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            context_tags: context_tags.to_string(),
+            source: "raw_input".to_string(),
+            metadata: "{}".to_string(),
+        };
+
+        #[derive(serde::Deserialize)]
+        struct Resp { memory: Node }
+        #[derive(serde::Deserialize)]
+        struct Node { id: String }
+
+        let resp: Resp = self.db
+            .execute_query("addMemory", &input)
+            .await
+            .map_err(|e| ToolingError::Database(e.to_string()))?;
+
+        #[derive(Serialize)]
+        struct EmbedInput {
+            memory_id: String,
+            vector_data: Vec<f64>,
+            embedding_model: String,
+            created_at: String,
+        }
+
+        let _ = self.db
+            .execute_query::<serde_json::Value, _>("addMemoryEmbedding", &EmbedInput {
+                memory_id: resp.memory.id,
+                vector_data: vector.iter().map(|&x| x as f64).collect(),
+                embedding_model: self.embedder.model().to_string(),
+                created_at: now,
+            })
+            .await;
+
+        self.ensure_user_exists(user_id).await;
+        let _ = self.db
+            .execute_query::<serde_json::Value, _>("linkUserToMemory", &serde_json::json!({
+                "user_id": user_id,
+                "memory_id": memory_id,
+                "context": "raw_source",
+            }))
+            .await;
+
+        Ok(memory_id)
     }
 
     async fn persist_entity_relation(
