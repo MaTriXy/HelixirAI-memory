@@ -315,14 +315,16 @@ impl ReasoningEngine {
             content: String,
         }
 
+        let is_deep = chain_type == "deep";
+        let effective_max_depth = if is_deep { max_depth.max(8) } else { max_depth };
+
         let mut relations = Vec::new();
         let mut visited = std::collections::HashSet::new();
-        let mut current_id = memory_id.to_string();
-        let mut depth = 0;
+        let mut frontier: Vec<(String, usize)> = vec![(memory_id.to_string(), 0)];
 
-        while depth < max_depth {
-            if visited.contains(&current_id) {
-                break;
+        while let Some((current_id, current_depth)) = frontier.pop() {
+            if current_depth >= effective_max_depth || visited.contains(&current_id) {
+                continue;
             }
             visited.insert(current_id.clone());
 
@@ -335,31 +337,40 @@ impl ReasoningEngine {
                 .await
             {
                 Ok(r) => r,
-                Err(_) => break,
+                Err(e) => {
+                    warn!(
+                        "getMemoryLogicalConnections failed for {}: {} (depth={})",
+                        crate::safe_truncate(&current_id, 16), e, current_depth
+                    );
+                    continue;
+                }
             };
 
             let candidates: Vec<(MemoryNode, ReasoningType, bool)> = match chain_type {
                 "causal" => {
-                    result.because_in.iter()
-                        .map(|n| (n.clone(), ReasoningType::Because, true))
-                        .collect()
+                    let mut c = Vec::new();
+                    for n in &result.because_in { c.push((n.clone(), ReasoningType::Because, true)); }
+                    for n in &result.because_out { c.push((n.clone(), ReasoningType::Because, false)); }
+                    for n in &result.implies_in { c.push((n.clone(), ReasoningType::Implies, true)); }
+                    c
                 }
                 "forward" => {
-                    result.implies_out.iter()
-                        .map(|n| (n.clone(), ReasoningType::Implies, false))
-                        .collect()
+                    let mut c = Vec::new();
+                    for n in &result.implies_out { c.push((n.clone(), ReasoningType::Implies, false)); }
+                    for n in &result.implies_in { c.push((n.clone(), ReasoningType::Implies, true)); }
+                    for n in &result.because_out { c.push((n.clone(), ReasoningType::Because, false)); }
+                    c
                 }
                 _ => {
                     let mut all = Vec::new();
-                    for n in &result.implies_out {
-                        all.push((n.clone(), ReasoningType::Implies, false));
-                    }
-                    for n in &result.because_in {
-                        all.push((n.clone(), ReasoningType::Because, true));
-                    }
-                    for n in &result.contradicts_out {
-                        all.push((n.clone(), ReasoningType::Contradicts, false));
-                    }
+                    for n in &result.implies_out { all.push((n.clone(), ReasoningType::Implies, false)); }
+                    for n in &result.implies_in { all.push((n.clone(), ReasoningType::Implies, true)); }
+                    for n in &result.because_out { all.push((n.clone(), ReasoningType::Because, false)); }
+                    for n in &result.because_in { all.push((n.clone(), ReasoningType::Because, true)); }
+                    for n in &result.contradicts_out { all.push((n.clone(), ReasoningType::Contradicts, false)); }
+                    for n in &result.contradicts_in { all.push((n.clone(), ReasoningType::Contradicts, true)); }
+                    for n in &result.relation_out { all.push((n.clone(), ReasoningType::Supports, false)); }
+                    for n in &result.relation_in { all.push((n.clone(), ReasoningType::Supports, true)); }
                     all
                 }
             };
@@ -370,65 +381,93 @@ impl ReasoningEngine {
                 .collect();
 
             if unvisited.is_empty() {
-                break;
+                continue;
             }
 
-            let best = if unvisited.len() == 1 {
-                unvisited.into_iter().next()
-            } else if let Some(llm) = &self.llm_provider {
-                let prompt = format!(
-                    "Given current memory and {} connected memories, which ONE is most logically relevant?\n\nCurrent: {}\n\nOptions:\n{}\n\nRespond with just the number (1-{}).",
-                    unvisited.len(),
-                    &current_id[..current_id.len().min(50)],
-                    unvisited.iter().enumerate()
-                        .map(|(i, (n, t, _))| format!("{}. [{}] {}", i + 1, t.edge_name(), n.content.chars().take(100).collect::<String>()))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    unvisited.len()
-                );
-                
-                match llm.generate("You are a reasoning assistant. Pick the most relevant connection.", &prompt, None).await {
-                    Ok((response, _)) => {
-                        let choice: usize = response.trim().parse().unwrap_or(1);
-                        unvisited.into_iter().nth(choice.saturating_sub(1))
-                    }
-                    Err(_) => unvisited.into_iter().next()
+            if is_deep {
+                for (node, relation_type, is_incoming) in &unvisited {
+                    let (from_id, to_id) = if *is_incoming {
+                        (node.memory_id.clone(), current_id.clone())
+                    } else {
+                        (current_id.clone(), node.memory_id.clone())
+                    };
+
+                    relations.push(ReasoningRelation {
+                        relation_id: format!("rel_{}_{}", crate::safe_truncate(&from_id, 8), crate::safe_truncate(&to_id, 8)),
+                        from_memory_id: from_id,
+                        to_memory_id: to_id,
+                        to_memory_content: node.content.clone(),
+                        relation_type: *relation_type,
+                        strength: 80,
+                        reasoning_id: None,
+                    });
+
+                    frontier.push((node.memory_id.clone(), current_depth + 1));
                 }
             } else {
-                unvisited.into_iter().next()
-            };
-
-            if let Some((node, relation_type, is_incoming)) = best {
-                let (from_id, to_id) = if is_incoming {
-                    (node.memory_id.clone(), current_id.clone())
+                let best = if unvisited.len() == 1 {
+                    unvisited.into_iter().next()
+                } else if let Some(llm) = &self.llm_provider {
+                    let prompt = format!(
+                        "Given current memory and {} connected memories, which ONE is most logically relevant?\n\nCurrent: {}\n\nOptions:\n{}\n\nRespond with just the number (1-{}).",
+                        unvisited.len(),
+                        &current_id[..current_id.len().min(50)],
+                        unvisited.iter().enumerate()
+                            .map(|(i, (n, t, _))| format!("{}. [{}] {}", i + 1, t.edge_name(), n.content.chars().take(100).collect::<String>()))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        unvisited.len()
+                    );
+                    
+                    match llm.generate("You are a reasoning assistant. Pick the most relevant connection.", &prompt, None).await {
+                        Ok((response, _)) => {
+                            let choice: usize = response.trim().parse().unwrap_or(1);
+                            unvisited.into_iter().nth(choice.saturating_sub(1))
+                        }
+                        Err(e) => {
+                            warn!("LLM chain selection failed: {}", e);
+                            unvisited.into_iter().next()
+                        }
+                    }
                 } else {
-                    (current_id.clone(), node.memory_id.clone())
+                    unvisited.into_iter().next()
                 };
 
-                relations.push(ReasoningRelation {
-                    relation_id: format!("rel_{}_{}", &from_id, &to_id),
-                    from_memory_id: from_id,
-                    to_memory_id: to_id,
-                    to_memory_content: node.content.clone(),
-                    relation_type,
-                    strength: 80,
-                    reasoning_id: None,
-                });
+                if let Some((node, relation_type, is_incoming)) = best {
+                    let (from_id, to_id) = if is_incoming {
+                        (node.memory_id.clone(), current_id.clone())
+                    } else {
+                        (current_id.clone(), node.memory_id.clone())
+                    };
 
-                current_id = node.memory_id;
-                depth += 1;
-            } else {
-                break;
+                    relations.push(ReasoningRelation {
+                        relation_id: format!("rel_{}_{}", crate::safe_truncate(&from_id, 8), crate::safe_truncate(&to_id, 8)),
+                        from_memory_id: from_id,
+                        to_memory_id: to_id,
+                        to_memory_content: node.content.clone(),
+                        relation_type,
+                        strength: 80,
+                        reasoning_id: None,
+                    });
+
+                    frontier.push((node.memory_id.clone(), current_depth + 1));
+                }
             }
         }
 
+        let max_depth_reached = relations.iter().count();
         let reasoning_trail = self.build_reasoning_trail(&relations);
+
+        debug!(
+            "Chain traversal for {}: type={}, relations={}, visited={}",
+            crate::safe_truncate(memory_id, 12), chain_type, relations.len(), visited.len()
+        );
 
         Ok(ReasoningChain {
             seed_memory_id: memory_id.to_string(),
             relations,
             chain_type: chain_type.to_string(),
-            depth,
+            depth: max_depth_reached,
             reasoning_trail,
         })
     }
@@ -472,41 +511,68 @@ Only output relations with strength >= 60. If no meaningful relation exists, out
             new_memory_content, context_str
         );
 
+        let parse_relations = |response: &str| -> Vec<ReasoningRelation> {
+            let parsed = serde_json::from_str::<Vec<serde_json::Value>>(response)
+                .or_else(|_| {
+                    if let Some(start) = response.find('[') {
+                        if let Some(end) = response.rfind(']') {
+                            return serde_json::from_str(&response[start..=end]);
+                        }
+                    }
+                    Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, "no array")))
+                });
+
+            match parsed {
+                Ok(inferred) => inferred
+                    .iter()
+                    .filter_map(|r| {
+                        let idx = r.get("existing_index")?.as_u64()? as usize;
+                        let (target_id, target_content) = similar_memories.get(idx)?;
+                        Some(ReasoningRelation {
+                            relation_id: format!(
+                                "inferred_{}_{}",
+                                crate::safe_truncate(new_memory_id, 8),
+                                crate::safe_truncate(target_id, 8)
+                            ),
+                            from_memory_id: new_memory_id.to_string(),
+                            to_memory_id: target_id.clone(),
+                            to_memory_content: target_content.clone(),
+                            relation_type: match r.get("type")?.as_str()? {
+                                "IMPLIES" => ReasoningType::Implies,
+                                "BECAUSE" => ReasoningType::Because,
+                                "CONTRADICTS" => ReasoningType::Contradicts,
+                                _ => ReasoningType::Supports,
+                            },
+                            strength: r.get("strength")?.as_i64()? as i32,
+                            reasoning_id: Some("llm_inferred".to_string()),
+                        })
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
+
         match llm.generate(system_prompt, &user_prompt, Some("json")).await {
             Ok((response, _metadata)) => {
-                match serde_json::from_str::<Vec<serde_json::Value>>(&response) {
-                    Ok(inferred) => {
-                        let relations: Vec<ReasoningRelation> = inferred
-                            .iter()
-                            .filter_map(|r| {
-                                let idx = r.get("existing_index")?.as_u64()? as usize;
-                                let (target_id, target_content) = similar_memories.get(idx)?;
-                                Some(ReasoningRelation {
-                                    relation_id: format!(
-                                        "inferred_{}_{}",
-                                        crate::safe_truncate(new_memory_id, 8),
-                                        crate::safe_truncate(target_id, 8)
-                                    ),
-                                    from_memory_id: new_memory_id.to_string(),
-                                    to_memory_id: target_id.clone(),
-                                    to_memory_content: target_content.clone(),
-                                    relation_type: match r.get("type")?.as_str()? {
-                                        "IMPLIES" => ReasoningType::Implies,
-                                        "BECAUSE" => ReasoningType::Because,
-                                        "CONTRADICTS" => ReasoningType::Contradicts,
-                                        _ => ReasoningType::Supports,
-                                    },
-                                    strength: r.get("strength")?.as_i64()? as i32,
-                                    reasoning_id: Some("llm_inferred".to_string()),
-                                })
-                            })
-                            .collect();
+                let relations = parse_relations(&response);
+                if !relations.is_empty() {
+                    debug!("LLM inferred {} relations", relations.len());
+                    return Ok(relations);
+                }
 
-                        debug!("LLM inferred {} relations", relations.len());
-                        Ok(relations)
+                warn!("First infer_relations attempt returned 0 relations, retrying");
+                let retry_prompt = format!(
+                    "{}\n\nIMPORTANT: Output ONLY a valid JSON array. No markdown, no explanation. Example: [{{\"existing_index\":0,\"type\":\"SUPPORTS\",\"strength\":75}}]",
+                    user_prompt
+                );
+                match llm.generate(system_prompt, &retry_prompt, Some("json")).await {
+                    Ok((retry_response, _)) => {
+                        let retry_relations = parse_relations(&retry_response);
+                        debug!("LLM inferred {} relations (retry)", retry_relations.len());
+                        Ok(retry_relations)
                     }
                     Err(e) => {
-                        warn!("Failed to parse LLM inference response: {}", e);
+                        warn!("LLM inference retry failed: {}", e);
                         Ok(Vec::new())
                     }
                 }

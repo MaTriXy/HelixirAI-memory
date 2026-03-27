@@ -565,7 +565,7 @@ impl ServerHandler for HelixirMcpServer {
                 .build(),
             server_info: Implementation {
                 name: "helixir".into(),
-                version: "0.3.0".into(),
+                version: "0.3.1".into(),
                 ..Default::default()
             },
             instructions: Some(prompts::get_server_instructions()),

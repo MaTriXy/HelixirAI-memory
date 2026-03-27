@@ -139,7 +139,9 @@ Decide what to do with the new memory. Choose ONE operation:
 - SUPERSEDE for temporal evolution, UPDATE for adding details
 - CONTRADICT keeps both, DELETE removes one
 - Be conservative with DELETE
-- Use NOOP to avoid duplicates{cross_user_reminder}"#
+- Use NOOP to avoid duplicates
+- When using UPDATE with merged_content: the result MUST be a single coherent statement about ONE topic. Do NOT merge unrelated facts. If the new memory and existing memory are about different topics, use ADD instead.
+- merged_content must NEVER contain contradictions ("X but Y", "X however Y" about different subjects){cross_user_reminder}"#
     )
 }
 

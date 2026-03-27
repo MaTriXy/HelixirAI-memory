@@ -120,9 +120,8 @@ impl<P: LlmProvider> LlmExtractor<P> {
             .generate(&system_prompt, &user_prompt, Some("json_object"))
             .await?;
 
-        
-        match serde_json::from_str::<ExtractionResult>(&response) {
-            Ok(result) => {
+        match self.try_parse_extraction(&response) {
+            Ok(result) if !result.memories.is_empty() => {
                 debug!(
                     "Extracted {} memories, {} entities, {} relations",
                     result.memories.len(),
@@ -131,15 +130,71 @@ impl<P: LlmProvider> LlmExtractor<P> {
                 );
                 Ok(result)
             }
-            Err(e) => {
-                warn!("Failed to parse extraction result: {}", e);
-                
-                Ok(ExtractionResult {
-                    memories: Vec::new(),
-                    entities: Vec::new(),
-                    relations: Vec::new(),
-                })
+            first_attempt => {
+                let first_err = match &first_attempt {
+                    Ok(r) if r.memories.is_empty() => "0 memories extracted".to_string(),
+                    Err(e) => format!("parse error: {}", e),
+                    _ => unreachable!(),
+                };
+                warn!("Extraction attempt 1 failed ({}), retrying with stricter prompt", first_err);
+
+                let retry_prompt = format!(
+                    "{}\n\nIMPORTANT: Your previous response was invalid ({}). Output ONLY valid JSON matching the schema. No markdown fences, no explanation text outside JSON.",
+                    user_prompt, first_err
+                );
+
+                match self.provider.generate(&system_prompt, &retry_prompt, Some("json_object")).await {
+                    Ok((retry_response, _)) => {
+                        match self.try_parse_extraction(&retry_response) {
+                            Ok(result) if !result.memories.is_empty() => {
+                                info!("Extraction retry succeeded: {} memories", result.memories.len());
+                                Ok(result)
+                            }
+                            Ok(_) => {
+                                warn!("Extraction retry also returned 0 memories, using fallback");
+                                Ok(self.fallback_extraction(text))
+                            }
+                            Err(e) => {
+                                warn!("Extraction retry parse failed: {}, using fallback", e);
+                                Ok(self.fallback_extraction(text))
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Extraction retry LLM call failed: {}, using fallback", e);
+                        Ok(self.fallback_extraction(text))
+                    }
+                }
             }
+        }
+    }
+
+    fn try_parse_extraction(&self, response: &str) -> Result<ExtractionResult, String> {
+        serde_json::from_str::<ExtractionResult>(response)
+            .or_else(|_| {
+                if let Some(start) = response.find('{') {
+                    if let Some(end) = response.rfind('}') {
+                        return serde_json::from_str(&response[start..=end])
+                            .map_err(|e| e.to_string());
+                    }
+                }
+                Err("no JSON object found in response".to_string())
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    fn fallback_extraction(&self, text: &str) -> ExtractionResult {
+        ExtractionResult {
+            memories: vec![ExtractedMemory {
+                text: text.to_string(),
+                memory_type: "fact".to_string(),
+                certainty: 50,
+                importance: 50,
+                entities: vec![],
+                context: None,
+            }],
+            entities: vec![],
+            relations: vec![],
         }
     }
 
