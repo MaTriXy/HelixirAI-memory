@@ -487,17 +487,24 @@ impl ReasoningEngine {
             return Ok(Vec::new());
         }
 
-        let system_prompt = r#"You are a reasoning engine. Analyze the NEW memory and EXISTING memories to infer logical relationships between them.
+        let system_prompt = r#"You are a reasoning engine that finds logical connections between memories. You MUST find at least one relationship if the memories share ANY topic, entity, or context.
 
 Output a JSON array. Each element:
 {"existing_index": 0, "type": "IMPLIES|BECAUSE|CONTRADICTS|SUPPORTS", "strength": 0-100}
 
-- IMPLIES: new memory logically leads to existing, or vice versa
+Relation types:
+- SUPPORTS: they share the same topic, reinforce each other, or provide evidence for the same conclusion (MOST COMMON — use when in doubt)
+- IMPLIES: one logically leads to or suggests the other
 - BECAUSE: one is a cause/reason for the other
 - CONTRADICTS: they conflict or are incompatible
-- SUPPORTS: they reinforce each other
 
-Only output relations with strength >= 60. If no meaningful relation exists, output empty array []."#;
+Rules:
+- If both memories mention the same project, person, technology, or concept → at minimum SUPPORTS (strength 50-70)
+- If one memory is a consequence of another → IMPLIES (strength 60-90)
+- If one memory explains why another is true → BECAUSE (strength 60-90)
+- Include relations with strength >= 40
+- Output ONLY a valid JSON array, no markdown, no explanation
+- If truly no connection exists (completely unrelated topics), output []"#;
 
         let context_str: String = similar_memories
             .iter()
@@ -514,6 +521,13 @@ Only output relations with strength >= 60. If no meaningful relation exists, out
         let parse_relations = |response: &str| -> Vec<ReasoningRelation> {
             let parsed = serde_json::from_str::<Vec<serde_json::Value>>(response)
                 .or_else(|_| {
+                    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(response) {
+                        if let Some(arr) = obj.get("relations").or_else(|| obj.get("results")).or_else(|| obj.get("data")) {
+                            if let Some(arr) = arr.as_array() {
+                                return Ok(arr.clone());
+                            }
+                        }
+                    }
                     if let Some(start) = response.find('[') {
                         if let Some(end) = response.rfind(']') {
                             return serde_json::from_str(&response[start..=end]);
@@ -552,11 +566,16 @@ Only output relations with strength >= 60. If no meaningful relation exists, out
             }
         };
 
-        match llm.generate(system_prompt, &user_prompt, Some("json")).await {
+        match llm.generate(system_prompt, &user_prompt, Some("json_object")).await {
             Ok((response, _metadata)) => {
+                info!(
+                    "infer_relations LLM response ({}b): {}",
+                    response.len(),
+                    &response.chars().take(200).collect::<String>()
+                );
                 let relations = parse_relations(&response);
                 if !relations.is_empty() {
-                    debug!("LLM inferred {} relations", relations.len());
+                    info!("LLM inferred {} relations for {}", relations.len(), crate::safe_truncate(new_memory_id, 12));
                     return Ok(relations);
                 }
 
@@ -565,7 +584,7 @@ Only output relations with strength >= 60. If no meaningful relation exists, out
                     "{}\n\nIMPORTANT: Output ONLY a valid JSON array. No markdown, no explanation. Example: [{{\"existing_index\":0,\"type\":\"SUPPORTS\",\"strength\":75}}]",
                     user_prompt
                 );
-                match llm.generate(system_prompt, &retry_prompt, Some("json")).await {
+                match llm.generate(system_prompt, &retry_prompt, Some("json_object")).await {
                     Ok((retry_response, _)) => {
                         let retry_relations = parse_relations(&retry_response);
                         debug!("LLM inferred {} relations (retry)", retry_relations.len());

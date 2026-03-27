@@ -42,6 +42,7 @@ impl ToolingManager {
 
         let mut added_ids = Vec::new();
         let mut updated_ids = Vec::new();
+        let mut stored_memory_ids: HashMap<usize, String> = HashMap::new();
         let mut skipped = 0usize;
         let mut entities_linked = 0usize;
         let mut relations_created = 0usize;
@@ -57,7 +58,7 @@ impl ToolingManager {
             .map_err(|e| ToolingError::Embedding(e.to_string()))?;
 
         for (i, memory) in memories_to_store.iter().enumerate() {
-            debug!("Processing memory: {}...", safe_truncate(&memory.text, 30));
+            debug!("Processing memory {}/{}: {}...", i, memories_to_store.len(), safe_truncate(&memory.text, 30));
 
             let vector = &all_embeddings[i];
 
@@ -78,13 +79,20 @@ impl ToolingManager {
                 })
                 .collect();
 
+            info!(
+                "Memory {}: similar_count={}, top_score={:.3}",
+                i,
+                similar_memories.len(),
+                similar_memories.first().map(|m| m.score).unwrap_or(0.0)
+            );
+
             let decision = self.decision_engine
                 .decide(&memory.text, &similar_memories, user_id)
                 .await;
 
-            debug!(
-                "Decision: {:?} (confidence={}, target={:?})",
-                decision.operation, decision.confidence, decision.target_memory_id
+            info!(
+                "Memory {} decision: {:?} (confidence={}, target={:?})",
+                i, decision.operation, decision.confidence, decision.target_memory_id
             );
 
             let memory_id = match self.handle_memory_operation(
@@ -105,6 +113,8 @@ impl ToolingManager {
                 None => continue,
             };
 
+            stored_memory_ids.insert(i, memory_id.clone());
+
             let (linked, rels) = self.enrich_memory_relations(
                 &memory_id,
                 memory,
@@ -120,7 +130,7 @@ impl ToolingManager {
         relations_created += self.resolve_and_persist_extraction_relations(
             &extraction.relations,
             &memories_to_store,
-            &added_ids,
+            &stored_memory_ids,
         ).await?;
 
         if message.len() > 100 && added_ids.len() > 1 {
@@ -560,17 +570,35 @@ impl ToolingManager {
         let mut entities_linked = 0usize;
         let mut relations_created = 0usize;
 
-        if !similar_memories.is_empty() && matches!(decision.operation, MemoryOperation::Add | MemoryOperation::Supersede) {
+        let should_infer = !similar_memories.is_empty()
+            && !matches!(decision.operation, MemoryOperation::Noop | MemoryOperation::Delete);
+
+        info!(
+            "enrich_memory_relations: memory={}, similar={}, decision={:?}, should_infer={}",
+            safe_truncate(memory_id, 12),
+            similar_memories.len(),
+            decision.operation,
+            should_infer
+        );
+
+        if should_infer {
             let context_pairs: Vec<(String, String)> = similar_memories
                 .iter()
                 .take(5)
                 .map(|s| (s.id.clone(), s.content.clone()))
                 .collect();
+
+            info!(
+                "Calling infer_relations with {} context pairs for {}",
+                context_pairs.len(), safe_truncate(memory_id, 12)
+            );
+
             match self.reasoning_engine
                 .infer_relations(memory_id, &memory.text, &context_pairs)
                 .await
             {
                 Ok(inferred) => {
+                    info!("infer_relations returned {} relations", inferred.len());
                     for rel in &inferred {
                         match self.reasoning_engine.add_relation(
                             &rel.from_memory_id,
@@ -582,17 +610,18 @@ impl ToolingManager {
                             Ok(_) => {
                                 relations_created += 1;
                                 info!(
-                                    "Inferred {} relation: {} -> {}",
+                                    "Persisted {} relation: {} -> {} (strength={})",
                                     rel.relation_type.edge_name(),
                                     safe_truncate(memory_id, 12),
-                                    safe_truncate(&rel.to_memory_id, 12)
+                                    safe_truncate(&rel.to_memory_id, 12),
+                                    rel.strength
                                 );
                             }
                             Err(e) => warn!("Failed to persist inferred relation: {}", e),
                         }
                     }
                 }
-                Err(e) => debug!("Relation inference skipped: {}", e),
+                Err(e) => warn!("Relation inference failed: {}", e),
             }
         }
 
@@ -662,23 +691,19 @@ impl ToolingManager {
         &self,
         extraction_relations: &[ExtractedRelation],
         memories_to_store: &[ExtractedMemory],
-        added_ids: &[String],
+        stored_memory_ids: &HashMap<usize, String>,
     ) -> Result<usize, ToolingError> {
         let mut relations_created = 0usize;
 
-        let mut memory_index_to_id: Vec<Option<String>> = Vec::new();
+        let memory_index_to_id: Vec<Option<String>> = (0..memories_to_store.len())
+            .map(|i| stored_memory_ids.get(&i).cloned())
+            .collect();
+
         let mut memory_content_to_id: HashMap<String, String> = HashMap::new();
-        {
-            let mut add_idx = 0usize;
-            for mem in memories_to_store {
-                if add_idx < added_ids.len() {
-                    memory_index_to_id.push(Some(added_ids[add_idx].clone()));
-                    let normalized = mem.text.to_lowercase();
-                    memory_content_to_id.insert(normalized, added_ids[add_idx].clone());
-                    add_idx += 1;
-                } else {
-                    memory_index_to_id.push(None);
-                }
+        for (i, mem) in memories_to_store.iter().enumerate() {
+            if let Some(id) = stored_memory_ids.get(&i) {
+                let normalized = mem.text.to_lowercase();
+                memory_content_to_id.insert(normalized, id.clone());
             }
         }
 
